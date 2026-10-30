@@ -5,6 +5,8 @@
 - Author: human + Claude
 - Supersedes: spec 001
 - Inputs: `docs/architecture/vision.md`, ADR 0014
+- Amended: 2026-10-30, live activity view `roster watch` (user story 8), added by the human; merging
+  its PR is the approval.
 
 ## Problem
 
@@ -37,6 +39,9 @@ Roster's own repository is a registered project like any other, so Roster can bu
    instead of a guessed PR.
 7. As the human, I want to see the state of a feature, its tasks and their executions from the CLI,
    and to stop a running execution.
+8. As the human, I want to watch live in the terminal which agent is running, on which task, and what
+   it is doing right now, step by step, so I can follow an execution of any project without opening
+   its log files.
 
 ## Acceptance criteria
 
@@ -86,10 +91,23 @@ Roster's own repository is a registered project like any other, so Roster can bu
       location and PR link.
 - [ ] `roster status` shows the feature's stage, each task with its state, and the latest executions.
 - [ ] `roster stop` ends a running execution: the container is killed and the task is marked stopped.
+- [ ] `roster watch` shows, live in the terminal, the running execution: its agent, its task and
+      feature, the elapsed time, the current job (agent, review, setup or verify) and the latest
+      rate-limit snapshot (ADR 0030).
+- [ ] While an agent job runs, `roster watch` prints one line per step the agent takes, translated
+      from the runtime's output (for example `Read src/x.ts`, `Edit src/y.ts`, `Bash: npm test`,
+      `denied: Bash (not allowed)`), and then the job's final result.
+- [ ] When nothing is running, `roster watch` says so and shows the outcome of the last execution;
+      it follows the next execution as soon as one starts.
+- [ ] `roster watch` is read-only: it never sends input to the agent, never takes the run lock and
+      never changes the store. It works from a second terminal while `roster run` runs, including a
+      run started by Windows Task Scheduler.
+- [ ] `roster watch` never shows a secret: it reads only the store and the redacted execution logs,
+      and it does not show tool output or file contents.
 
 ## Out of scope
 
-- Web dashboard (its own spec, reading the same store).
+- Web dashboard (its own spec, reading the same store and execution logs).
 - Runtimes other than Claude Code (only the adapter interface exists).
 - Several tasks in parallel.
 - Autonomous merges, deploys and database migrations.
@@ -111,6 +129,11 @@ Roster's own repository is a registered project like any other, so Roster can bu
 - **Code review:** in scope (see the criterion below).
 - **Approvals:** merging the PR that contains a spec or a plan is its approval, the same mechanism as
   ADR 0012. There is no separate approval command.
+- **Live activity view (added by the human on 2026-10-30):** `roster watch` is in scope (user story 8
+  and its criteria under "Visibility and control"). Roster will build other projects, and the human
+  wants one place to see which agent is running and what it is doing right now. Concurrency stays 1,
+  so there is at most one running agent. A later web dashboard will read the same data; its design
+  is out of scope here.
 
 ### Code review
 

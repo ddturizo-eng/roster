@@ -1,12 +1,14 @@
 # Plan 002 — Local core MVP
 
-- Spec: `specs/002-local-core/spec.md` (approved 2026-10-30, PR #2)
+- Spec: `specs/002-local-core/spec.md` (approved 2026-10-30, PR #2; amended 2026-10-30 with
+  `roster watch`, user story 8)
 - Date: 2026-10-30
 - Author: architect
-- ADRs: 0015-0030 (0030 amends 0028).
+- ADRs: 0015-0031 (0030 amends 0028; 0031 extends 0022).
   Superseded by them: 0006, 0007, 0009, 0012, 0013.
   Kept: 0002, 0003, 0004, 0005, 0008 (amended by 0017), 0010 (extended by 0022), 0014.
-- Status: Approved (2026-10-30, PR #3). ADRs 0015-0029 Accepted.
+- Status: Approved (2026-10-30, PR #3). ADRs 0015-0030 Accepted. ADR 0031 (live activity view) Accepted
+  Proposed 2026-10-30.
 
 ## 1. Summary
 
@@ -30,7 +32,7 @@ the PR. Human approval at every gate is the merge of a PR, which Roster detects.
 The plan is ordered as a walking skeleton (see `tasks.md`): first a minimal `roster run` that executes
 one imported task in a container and opens a PR, so Roster can execute the rest of its own tasks; then
 verification, dependencies, hiring and scheduling; then the feature lifecycle and grilling; then code
-review; then status and stop.
+review; then status, stop and the live activity view (`roster watch`).
 
 ## 2. What is reused from spec 001
 
@@ -56,9 +58,9 @@ current-issue file.
 
 ## 3. Decisions and hypotheses
 
-Decisions are recorded in ADRs 0015-0030. The following are **hypotheses** the plan depends on.
+Decisions are recorded in ADRs 0015-0031. The following are **hypotheses** the plan depends on.
 The spike task T14 (`needs-human`) runs first, before any other task, with throwaway files, and
-validates H2-H7 before the images and adapters that depend on them are built. T06 validates H1. T24, T29 and T40 (real runs) validate H8-H10.
+validates H2-H7 before the images and adapters that depend on them are built. T06 validates H1. T24, T29 and T40 (real runs) validate H8-H10. T41 and T40 validate H11.
 
 | Id | Hypothesis | If false |
 | --- | --- | --- |
@@ -72,6 +74,7 @@ validates H2-H7 before the images and adapters that depend on them are built. T0
 | H8 | A Task Scheduler task set to "run only when the user is logged on" starts `roster run` with Docker Desktop available and DPAPI usable while the screen is locked. | The human keeps a session open; documented in the runbook. |
 | H9 | Claude Pro quota allows at least one 2 h task per 5 h window, and the 7-day window does not stop the nightly runs (its utilization was already 0.6 during T14). Each execution records the 5-hour and 7-day utilization (ADR 0030), so the human can check this. | Lower `maxRunsPerNight`; the DAG still orders the work. A 7-day exhaustion pauses runs until its `resetsAt` (ADR 0030). |
 | H10 | `git push` with `gh auth git-credential` as the credential helper uses `GH_TOKEN` from the child environment. | Use a one-shot `GIT_ASKPASS` helper that reads the token from the environment. |
+| H11 | On Windows, a second process (`roster watch`) can open and read a job log while the `roster run` process appends to it, and sees each new line within about 1 s (ADR 0031). | The sandbox adapter opens the log with explicit shared read access and flushes after each line; the viewer design does not change. |
 
 ## 4. Architecture
 
@@ -84,7 +87,7 @@ src/
               secrets/dpapi · scheduler/windows · console/tty
   ports/      RuntimePort · SandboxPort · VcsPort · ForgePort · StorePort · SecretsPort
               ClockPort · ConsolePort · FileSystemPort
-  core/       domain · dag · lifecycle · agents · router · policy · messages · orchestrator
+  core/       domain · dag · lifecycle · agents · router · policy · messages · orchestrator · watch
 ```
 
 - `core` imports only `core` and `ports` (types). No Node built-ins with side effects, no adapters.
@@ -99,7 +102,7 @@ src/
 
 | Module | Responsibility |
 | --- | --- |
-| `core/domain` | Types and ids: Project, Feature, Stage, Task, TaskStatus, Execution, JobKind, AgentDefinition, Capability, result contracts and their validators, ApprovalRequest, typed errors. |
+| `core/domain` | Types and ids: Project, Feature, Stage, Task, TaskStatus, Execution, JobKind, AgentDefinition, Capability, result contracts and their validators, ApprovalRequest, ActivityEvent (ADR 0031), typed errors. |
 | `core/dag` | Parse `tasks.md` (ADR 0019), validate ids and references, detect cycles (names the cycle), compute readiness, select the next task, compute re-import changes. Pure. |
 | `core/lifecycle` | Feature state machine (ADR 0020). Pure transition function that refuses skipped stages. |
 | `core/agents` | Parse and validate AgentDefinition v2 frontmatter (flat subset) and v1 compatibility (ADR 0021). Pure. |
@@ -107,13 +110,14 @@ src/
 | `core/policy` | Fixed MVP policy (ADR 0024): operation classes, protected-path matcher, allowed paths per job kind, dependency-manifest detection, egress allowlists per job profile, limits. Interprets `policies/*.json` content given to it. Pure. Protected path. |
 | `core/messages` | Templates for stop reasons and console text in `human_language` (`es`, `en` fallback). |
 | `core/orchestrator` | The `run` pipeline (section 8), hiring step, stage jobs (analysis, architect), review step, sync of PR states, import, retry, stop. Talks only to ports. |
+| `core/watch` | View of `roster watch` (section 7.12, ADR 0031): from store rows, activity events and the current time, builds the header and one line per event, with labels in `human_language` and every log string made safe for the terminal. Pure. |
 
 ### 4.3 Adapters
 
 | Adapter | Implements | Notes |
 | --- | --- | --- |
-| `runtime/claude-code` | RuntimePort | Builds the container invocation for `claude -p`, generates the managed settings file from capabilities and policy (`managed-settings.ts`, protected), parses stream-json, maps outcomes, detects quota, returns the last `rate_limit_event` snapshot and, on quota exhaustion, the reset time (ADR 0030). Never `--bare`. |
-| `sandbox/docker` | SandboxPort | Docker CLI through `execFile`. Creates the per-execution internal network, starts the egress proxy, runs job containers, streams logs to a file with secret redaction, enforces timeouts, kills by name. Isolation flags live in `isolation.ts` (protected) and cover every job profile from the start. |
+| `runtime/claude-code` | RuntimePort | Builds the container invocation for `claude -p`, generates the managed settings file from capabilities and policy (`managed-settings.ts`, protected), parses stream-json, maps outcomes, detects quota, returns the last `rate_limit_event` snapshot and, on quota exhaustion, the reset time (ADR 0030). Translates one `stream-json` line at a time into activity events for `roster watch` (`activity.ts`, the optional `activity` member of RuntimePort, ADR 0031). Never `--bare`. |
+| `sandbox/docker` | SandboxPort | Docker CLI through `execFile`. Creates the per-execution internal network, starts the egress proxy, runs job containers, writes each job's stdout and stderr to its log files line by line with per-line secret redaction (ADR 0031), enforces timeouts, kills by name. Isolation flags live in `isolation.ts` (protected) and cover every job profile from the start. |
 | `vcs/git` | VcsPort | Workspaces with a separate git dir, safe git config on every call, branch prepare/resume, commit, changed paths over a range, `git show` of `origin/main` blobs, push through `push-guard.ts` (protected). |
 | `forge/github` | ForgePort | `gh` CLI with `GH_TOKEN` passed only to its child process: create or reuse PR, PR state and `mergedAt`, read `main` protection for `doctor`. |
 | `store/sqlite` | StorePort | `node:sqlite`, schema migrations, one database file (ADR 0018). |
@@ -145,7 +149,8 @@ src/
   config.json          machine config (ADR 0018): Roster repo path, workspace root, limits
   data\roster.db       SQLite store
   secrets\             claude-oauth-token.dpapi, github-token.dpapi
-  logs\<execution-id>\ agent.jsonl, setup.log, verify.log, review.jsonl, proxy.log
+  logs\<execution-id>\ agent.jsonl, review.jsonl (runtime stdout, raw stream-json, redacted),
+                       setup.log, verify.log, <job>.stderr.log, proxy.log (ADR 0031)
   workspaces\<project>\<execution-id>\{git\, tree\, in\, out\}
   run.lock             global lock: PID + execution id
 ```
@@ -174,6 +179,10 @@ Execution ids are time-ordered: `<yyyymmddhhmmss>-<6 hex>`.
 | `approval_requests` | `id`, `task_id`, `kind` (`dependencies`, `protected_path`), `detail_json`, `content_hash`, `created_at`, `resolved_at`, `resolution` | `content_hash` ties a dependency approval to exact manifest contents. |
 | `runtime_state` | `runtime` PK, `quota_exhausted_at`, `cooldown_until`, `cooldown_source` (`resets_at` \| `fallback`), `cooldown_window` (for example `five_hour`, `seven_day`; null for `fallback`) | Router input (ADR 0028). `cooldown_until` is the reset time reported by the runtime, or `quota_exhausted_at + quotaCooldownMinutes` when none is usable (ADR 0030). |
 
+There is no table for live activity. `roster watch` reads the running execution, its running step
+and its rate-limit columns from this store, and each agent step from the job's log file (ADR 0031).
+No migration is needed for it.
+
 ## 6. Git-side formats
 
 - **Project registration** `projects/<name>.json` in the Roster repo (ADR 0018):
@@ -191,7 +200,8 @@ Execution ids are time-ordered: `<yyyymmddhhmmss>-<6 hex>`.
 ## 7. CLI commands and data flow
 
 All commands load `config.json`, open the store and apply migrations. Commands that start agent
-jobs take the global lock first and refuse to start while another process holds it.
+jobs take the global lock first and refuse to start while another process holds it. Read-only
+commands (`roster status`, `roster watch`) never take the lock.
 
 ### 7.1 `roster project add <name> --path <repo>`
 
@@ -298,6 +308,89 @@ last 4 characters.
 
 Registers the Task Scheduler task that runs `%LOCALAPPDATA%\Roster\bin\roster.cmd run` at the night
 slots (ADR 0015).
+
+### 7.12 `roster watch [--once] [--lines <n>]` (ADR 0031)
+
+Read-only live view of the running execution, for any registered project. It runs until Ctrl+C
+(exit 0); `--once` prints the current view and exits 0.
+
+```
+every ~1 s
+ ├─ store: execution with status running (at most one: concurrency is 1)
+ │    none ─► "nothing running" + last finished execution
+ │            (id, task, agent, status, end, reason, PR link) ── wait for the next one
+ ├─ execution or running step changed ─► header:
+ │    feature, task id and title, agent, runtime, job kind, current step, start, elapsed,
+ │    rate-limit snapshot (status, 5-hour and 7-day utilization %, reset times, observed at)
+ ├─ running row of execution_steps:
+ │    agent | review   ─► follow <log_dir>\<step>.jsonl ─► activity translator of executions.runtime
+ │    setup | verify   ─► follow <log_dir>\<step>.log as plain lines
+ │    workspace | policy | commit | push | pr ─► Roster's own step, nothing to follow
+ │    log file not there yet ─► "starting"
+ ├─ new complete lines ─► ActivityEvents ─► core/watch ─► one printed line each, "+mm:ss" prefix
+ ├─ rate_limit event with new values ─► one rate-limit line
+ ├─ 60 s with no new line ─► one "still running <step>, elapsed h:mm:ss" line
+ └─ executions.pid not alive ─► "the run process is gone; the next roster run marks it interrupted"
+```
+
+**Where the data comes from.**
+
+- Store (read only): the running execution joined with its task and feature, its running
+  `execution_steps` row, its rate-limit columns, the last finished execution, and
+  `latestRateLimit(runtime)` (T07).
+- The rate-limit snapshot shown is the latest `rate_limit` event of the current job's log; else the
+  execution's stored snapshot; else the runtime's latest snapshot from an earlier execution. It is
+  labeled with when it was observed, or "no data".
+- Log: the file of the running step, written by the sandbox adapter with the guarantees of ADR 0031
+  (one record per line, raw `stream-json` for runtime jobs, redacted per line, appended as produced,
+  stderr in a separate file).
+
+**Follow reader** (`src/cli/log-follow.ts`). Each poll checks the file size, opens the file read-only,
+reads from the last offset, and closes it. An unterminated last line stays buffered until its newline
+arrives. A file shorter than the offset is read again from the start. The reader never holds the file
+open between polls, so it never blocks the writer or retention cleanup. When `watch` starts in the
+middle of a job, it reads that job's log from the start to rebuild the translator state and prints
+only the last `n` lines (default 20).
+
+**Translator** (Claude Code: `src/adapters/runtime/claude-code/activity.ts`, pure, the optional
+`activity` member of RuntimePort). It is chosen by `executions.runtime` through the runtime registry
+(T17). It keeps the map from `tool_use` id to tool name in its state.
+
+| `stream-json` line | Printed line (example) |
+| --- | --- |
+| `system` `init` | `start: claude-code 2.1.314, claude-sonnet-5-5, dontAsk` |
+| `assistant` `tool_use` `Read`, `Edit`, `Write`, `NotebookEdit` | `Read src/x.ts` (`file_path` relative to `/workspace`) |
+| `assistant` `tool_use` `Bash` | `Bash: npm test` (first line of `command`) |
+| `assistant` `tool_use` `Grep`, `Glob`, `WebSearch`, `Task` | `Grep TODO in src`, `Glob **/*.ts`, the query, the description |
+| `assistant` `tool_use` of any other tool | the tool name |
+| `user` `tool_result`, `is_error`, text matches the denial pattern constant (`No such tool available`) | `denied: Bash (not allowed)` |
+| `user` `tool_result`, `is_error`, other text | `error: Bash: <first line of the error>` |
+| `rate_limit_event` | updates the snapshot; one rate-limit line when values change |
+| `result` | `result: success, 4 turns, 4.9 s: <first line of result>` or `result: error_max_turns: Reached maximum number of turns (2)` |
+| successful `tool_result`, assistant text, other types (`system` `ui_invalidate`), malformed or non-JSON lines | nothing |
+
+A tool call is printed when it starts, so a long `Bash: npm test` is visible while it runs; a denied
+call shows its attempt line followed by its `denied:` line.
+
+**Rendering** (`core/watch`, pure). Labels (header fields, `denied`, `error`, `result`, "nothing
+running") come from `core/messages` in `human_language` (`es`, `en` fallback). Tool names, paths and
+commands are printed verbatim. Every string taken from a log is untrusted: control characters (C0,
+DEL, C1, including ESC) are replaced, it is printed on one line and cut to 120 characters. Output is
+append-only plain text (no cursor control), so it also works when redirected to a file.
+
+**Secrets.** The log is already redacted by the sandbox adapter (T15), line by line before it is
+written, so a token split across two read chunks is still caught (ADR 0031). `watch` has no
+SecretsPort, reads no secret, and adds no new place where a secret could appear. It shows tool names
+and short targets only, never successful tool output, file contents or the agent's intermediate text.
+
+**Read-only.** `watch` never takes `run.lock`, writes nothing to the store or the logs (as `roster
+status`), never calls Docker or touches a container, and sends no input to any process: the agent's
+stdin is the prompt file, and nothing attaches to it. The store is in WAL mode (T06), so `watch`
+reads committed rows while `roster run` writes; each poll is one short read.
+
+**Task Scheduler.** The scheduled `roster run` runs as the same Windows user, only while the user is
+logged on (ADR 0015), so it uses the same `%LOCALAPPDATA%\Roster` store and logs that `watch` reads
+from any terminal of that user. Nothing needs to be configured for it.
 
 ## 8. The execution pipeline (one task)
 
@@ -480,8 +573,9 @@ paths carry `Needs human` in `tasks.md`.
 | GitHub fine-grained PAT (ADR 0029) | `%LOCALAPPDATA%\Roster\secrets\github-token.dpapi` | `secrets/dpapi` ─► `GH_TOKEN` of `gh` and of `git push` (through `gh auth git-credential`) | No |
 | Claude credential files (`.credentials.json`, keychain) | Wherever Claude Code keeps them | Nobody: Roster never reads them | No |
 
-Roster redacts both token values from every log line it writes. Tokens never appear in command-line
-arguments, error messages, the store or git.
+Roster redacts both token values from every log line it writes, line by line before the line is
+written (ADR 0031). Tokens never appear in command-line arguments, error messages, the store or git.
+`roster watch` reads no secret; it shows only what the redacted logs and the store hold.
 
 ## 13. Windows 11 + Docker Desktop specifics
 
@@ -500,6 +594,8 @@ arguments, error messages, the store or git.
 - Node type stripping does not run under `node_modules`, hence the plain-directory pinned install.
 - Stopping uses `docker kill` of the named containers; Roster does not rely on Windows process-tree
   signals.
+- Log files are written by the `roster run` process and read by `roster watch` from another process
+  of the same user; neither opens them exclusively, and `watch` re-opens them on each poll (H11).
 
 ## 14. Agent contracts (ADR 0026)
 
@@ -525,16 +621,17 @@ container/devops, Windows/PowerShell, docs. `hr-director` assigns the specialist
 | --- | --- |
 | The agent reads `CLAUDE_CODE_OAUTH_TOKEN` and tries to exfiltrate it. | Egress only to the provider API; no other route; token redacted from logs; the human can revoke and regenerate it. Accepted by the human. |
 | Prompt injection in repo content, tasks or agent output. | Treated as untrusted; Roster validates results, owns side effects, checks paths before push; PR text is data only. |
+| Agent output shown by `roster watch` (paths, commands, error and result text) carries terminal escape sequences or very long text. | `core/watch` replaces control characters, prints one line per event and cuts it to 120 characters (ADR 0031); successful tool output and file contents are never shown. |
 | A hostile work tree plants git hooks or `core.fsmonitor` to run code on the host when Roster commits. | No `.git` in the work tree; separate git dir; hooks path forced to an empty dir; fsmonitor off. |
 | Agent edits project `.claude/settings.json` or `.mcp.json` to widen its own permissions mid-run. | Managed settings with managed-only rules and hooks; `--strict-mcp-config`; protected paths stop the push. |
 | Pushing a branch with modified workflows runs them on GitHub with secrets. | `.github/workflows/**` is protected; the PAT has no Workflows permission. |
 | Guard code is weakened by a merged PR the human did not read carefully. | Guard files are protected, so only the human pushes them; the pinned install updates only when the human runs the install script. |
 | `node:sqlite` changes behavior (H1). | Store behind a port; migration tests; fallback option in ADR 0017. |
-| Claude Code CLI changes flags or output format. | Version pinned in the image; upgrades go through a PR; adapter tests with recorded streams. |
+| Claude Code CLI changes flags or output format. | Version pinned in the image; upgrades go through a PR; adapter tests with recorded streams. `roster watch` skips lines it does not recognize, so a format change shows fewer lines and never fails. |
 | Quota exhaustion not detected (H5). | Ends as `failed`, which is safe; patterns in one constant with tests. |
 | The 7-day window is exhausted and the cooldown pauses every run for days (H9). | Intended (ADR 0030): runs would fail anyway. `roster status` shows the cooldown end and window and the per-execution 7-day utilization, so the human sees the pressure early and can lower `maxRunsPerNight`. An unusable `resetsAt` falls back to `quotaCooldownMinutes`. |
 | Docker Desktop not running or PC asleep at night. | `run` records and exits; `doctor` and runbook; Task Scheduler "wake" and "start when available". |
-| A crash leaves an execution `running`. | Lock file with PID; the next `run` marks it `interrupted` (task `failed`), kills leftover containers and removes the network. |
+| A crash leaves an execution `running`. | Lock file with PID; the next `run` marks it `interrupted` (task `failed`), kills leftover containers and removes the network. `roster watch` says when the recorded PID is no longer alive. |
 | Disk fills with workspaces and logs. | Retention setting; `doctor` checks free space. |
 | Re-import of a changed `tasks.md` conflicts with running work. | Import rules in ADR 0019: done tasks keep status; removed unstarted tasks are cancelled; a removed task in progress blocks the import. |
 | Approval fatigue. | Whole plans are approved in one merge; hires once per profile. |
@@ -564,3 +661,7 @@ Spike T14 finding 6, accepted the same day (ADR 0030): the quota cooldown lasts 
 reported by Claude Code (the 7-day reset when that window is exhausted), with `quotaCooldownMinutes`
 only as the fallback; every execution records the latest rate-limit snapshot. Whether `roster run`
 should skip work when the 7-day utilization is high stays open.
+
+Live activity view, added by the human the same day (spec user story 8): `roster watch` (section
+7.12, ADR 0031, task T41). It reads the store and the redacted job logs, and is read-only. The later
+web dashboard will read the same data; it is not designed here.
