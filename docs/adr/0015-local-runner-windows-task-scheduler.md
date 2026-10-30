@@ -1,8 +1,8 @@
 # 0015. Local runner on the human's PC, triggered by Windows Task Scheduler
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 - Supersedes: 0006
 
 ## Context

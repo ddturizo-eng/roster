@@ -1,8 +1,8 @@
 # 0023. Container isolation boundary for agent, setup and verification jobs
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 
 ## Context
 

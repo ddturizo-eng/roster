@@ -1,8 +1,8 @@
 # 0022. Runtime port inside a sandbox, and routing by capabilities
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 - Extends: 0010
 
 ## Context

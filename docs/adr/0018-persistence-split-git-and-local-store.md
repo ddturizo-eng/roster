@@ -1,8 +1,8 @@
 # 0018. Persistence split: git for reviewed intent, a local SQLite store for operational state
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 
 ## Context
 

@@ -1,8 +1,8 @@
 # 0026. Roster owns every side effect; agents return a validated result file
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 - Supersedes: 0009
 
 ## Context

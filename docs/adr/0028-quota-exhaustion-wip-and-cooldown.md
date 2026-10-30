@@ -1,8 +1,8 @@
 # 0028. Quota exhaustion keeps the work on the agent branch, returns the task to `todo`, and cools the runtime down
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 - Supersedes: 0013
 
 ## Context
