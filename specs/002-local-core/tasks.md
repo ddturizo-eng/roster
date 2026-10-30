@@ -12,7 +12,12 @@ dependency list. `Needs human` marks work agents must not do alone: credentials,
 setup, repository settings, protected paths after bootstrap, and real runs. `Profile` is a hint for
 `hr-director`, who assigns the `Agent` field afterwards.
 
-**Walking skeleton cut-off: T24.** Tasks T01-T24 are the bootstrap: they run in supervised sessions,
+**Order changes (human, 2026-10-30):** T14, the risk spike, is listed first and runs before any other
+task, because every container and runtime task depends on its findings. T17, the runtime router, moved
+to Phase B: with one runtime, T20 resolves `claude-code` directly. Ids are unchanged; file order is
+the selection order (ADR 0019).
+
+**Walking skeleton cut-off: T24.** The Phase A tasks (T14, T01-T13, T15, T16, T18-T24) are the bootstrap: they run in supervised sessions,
 one at a time, tracked by this file and PRs (ADR 0014). T24 installs Roster, imports this file into
 the store and makes the first real `roster run`. From T25 on, Roster executes its own tasks; tasks that
 touch protected paths (ADR 0025) carry `Needs human`.
@@ -23,6 +28,25 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 (T16).
 
 ## Phase A — Walking skeleton (bootstrap)
+
+## T14. Spike: Claude Code headless in a container on Docker Desktop
+
+- [ ] Done
+- Depends on: none (runs first, before any other task)
+- Needs human: needs Docker Desktop, a real `claude setup-token` token and real runs
+- Profile: container/devops
+- Areas: `docs/spikes/2026-11-container-runtime.md`, `docs/spikes/container-runtime/` (throwaway files)
+- Acceptance criteria:
+  - Uses a throwaway image (`node:24-bookworm-slim` plus a pinned Claude Code CLI, user uid 1000) and a
+    throwaway logging CONNECT proxy, both kept under `docs/spikes/container-runtime/` and never reused as
+    product code; T13 builds the real images from these findings.
+  - With that image, an internal network and the proxy, a trivial `claude -p` prompt runs as uid 1000 with only `CLAUDE_CODE_OAUTH_TOKEN` (no `--bare`) and returns a result: confirms or refutes H2.
+  - Records which Anthropic hosts the proxy saw, and whether the run works with only `api.anthropic.com` (H3).
+  - Confirms a read-only managed settings mount at `/etc/claude-code/managed-settings.json` with `allowManagedPermissionRulesOnly` and `dontAsk` is honored: a denied tool is denied without waiting (H4).
+  - Records a sample `stream-json` output, including the `result` line, saved as a test fixture with no secrets.
+  - Records the internal network's DNS and route behavior (H7) and the time of `npm ci && npm test` of a small project on an NTFS bind mount (H6).
+  - Lists any flag, version or allowlist change the images and adapters (T13, T15, T16) must follow.
+- Verification: the human reviews the spike notes; each hypothesis is marked confirmed or refuted with evidence.
 
 ## T01. Scaffold the roster package, CI and the layering test
 
@@ -189,31 +213,16 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 ## T13. Container images and egress proxy
 
 - [ ] Done
-- Depends on: T01
+- Depends on: T01, T14
 - Profile: container/devops
 - Areas: `container/runtime-claude/`, `container/egress-proxy/`, tests (protected paths)
 - Acceptance criteria:
   - `container/runtime-claude/Dockerfile`: `node:24-bookworm-slim` pinned by digest, user `agent` uid 1000, Claude Code CLI at a pinned version (build argument with a default), auto-update disabled, `ripgrep` and `ca-certificates`, no `git`, no `gh`, working directory `/workspace`.
   - `container/egress-proxy/proxy.ts`: zero-dependency HTTP CONNECT proxy that allows only `host:443` pairs given as arguments, rejects everything else with 403, never forwards plain HTTP, and logs one JSON line per decision.
   - `container/egress-proxy/Dockerfile` from the same base, non-root.
+  - Applies the T14 findings: Claude Code CLI version, flags and the Anthropic hosts in the allowlist.
   - Both images build with `docker build` and carry a label with the Roster commit.
 - Verification: unit tests of the proxy's allow/deny logic and request parsing; the human runs `docker build` of both images and pastes the result in the PR.
-
-## T14. Spike: Claude Code headless in a container on Docker Desktop
-
-- [ ] Done
-- Depends on: T13
-- Needs human: needs Docker Desktop, a real `claude setup-token` token and real runs
-- Profile: container/devops
-- Areas: `docs/spikes/2026-11-container-runtime.md`
-- Acceptance criteria:
-  - With the T13 images, an internal network and the proxy, a trivial `claude -p` prompt runs as uid 1000 with only `CLAUDE_CODE_OAUTH_TOKEN` (no `--bare`) and returns a result: confirms or refutes H2.
-  - Records which Anthropic hosts the proxy saw, and whether the run works with only `api.anthropic.com` (H3).
-  - Confirms a read-only managed settings mount at `/etc/claude-code/managed-settings.json` with `allowManagedPermissionRulesOnly` and `dontAsk` is honored: a denied tool is denied without waiting (H4).
-  - Records a sample `stream-json` output, including the `result` line, saved as a test fixture with no secrets.
-  - Records the internal network's DNS and route behavior (H7) and the time of `npm ci && npm test` of a small project on an NTFS bind mount (H6).
-  - Lists any flag or version change the adapters (T15, T16) must follow.
-- Verification: the human reviews the spike notes; each hypothesis is marked confirmed or refuted with evidence.
 
 ## T15. Docker sandbox adapter
 
@@ -241,18 +250,6 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - `interpret(exit, logPath)` parses the `stream-json` log and returns `completed`, `quota_exhausted` (patterns in one exported constant), `timeout`, `error` or `stopped`.
   - Reading `/roster/out/result.json` and validating it is left to the orchestrator.
 - Verification: unit tests with the T14 fixture and synthetic fixtures for each outcome; snapshot of the generated managed settings for each capability set.
-
-## T17. Runtime router and registry
-
-- [ ] Done
-- Depends on: T05, T07
-- Profile: TS core
-- Areas: `src/core/router/`, `src/cli/runtimes.ts`, tests
-- Acceptance criteria:
-  - `selectRuntime({ agent, enabled, runtimes, state, now })` implements ADR 0022: first preferred, enabled, capable runtime not in cooldown; otherwise a typed "none" with the reason.
-  - `ROSTER_HARNESS`, when set, restricts the choice to that runtime; unknown names fail fast.
-  - The CLI registry maps `claude-code` to the adapter of T16.
-- Verification: table-driven tests: capability missing, cooldown active and expired, override, unknown name.
 
 ## T18. Sync of task PR states
 
@@ -282,7 +279,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 ## T20. Orchestrator: task pipeline happy path
 
 - [ ] Done
-- Depends on: T03, T08, T10, T11, T15, T16, T17, T18, T19
+- Depends on: T03, T07, T08, T10, T11, T15, T16, T18, T19
 - Profile: TS core
 - Areas: `src/core/orchestrator/run.ts`, `src/core/orchestrator/prompt.ts`, tests
 - Acceptance criteria:
@@ -291,6 +288,9 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Branch `agent/<NNN>-<Tnn>`; PR title `<NNN>-<Tnn>: <title>`; PR body with task id, summary, agent verification, notes and execution id.
   - A selected task without an approved agent ends `blocked` with the "no agent" reason (replaced by hiring in T28).
   - Nothing is pushed before the result is validated and the policy check passes.
+  - Runtime resolution in the skeleton: the only runtime is `claude-code`; while its
+    `runtime_state.cooldown_until` is in the future, the run exits 0 with "quota cooldown". The
+    capability router replaces this in T17.
 - Verification: unit test asserting the exact ordered list of side effects and store updates for the happy path and for "nothing to do".
 
 ## T21. Orchestrator: stop, failure, quota and recovery paths
@@ -347,11 +347,24 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Docker Desktop starts at sign-in with the WSL2 backend.
   - The human commits `projects/roster.json` (with `setup` and `verify` commands) through a reviewed PR.
   - `scripts/install.ps1` installed the pinned version; `roster doctor` passes.
-  - `roster feature import roster 002-local-core` imports this file with T01-T23 `done`.
-  - `roster run` executes the next ready task (T25 or a sandbox task) in a container and opens a PR from `agent/002-<Tnn>` without manual steps.
+  - `roster feature import roster 002-local-core` imports this file with every Phase A task before T24 `done`.
+  - `roster run` executes the next ready Phase B task in a container and opens a PR from `agent/002-<Tnn>` without manual steps.
 - Verification: the human records the `doctor` output, the import summary, the execution id and the PR link in this task's PR.
 
 ## Phase B — Complete execution
+
+## T17. Runtime router and registry
+
+- [ ] Done
+- Depends on: T05, T07, T24
+- Profile: TS core
+- Areas: `src/core/router/`, `src/cli/runtimes.ts`, `src/core/orchestrator/`, tests
+- Acceptance criteria:
+  - `selectRuntime({ agent, enabled, runtimes, state, now })` implements ADR 0022: first preferred, enabled, capable runtime not in cooldown; otherwise a typed "none" with the reason.
+  - `ROSTER_HARNESS`, when set, restricts the choice to that runtime; unknown names fail fast.
+  - The CLI registry maps `claude-code` to the adapter of T16.
+  - Replaces the fixed runtime resolution of T20; the orchestrator's existing tests still pass.
+- Verification: table-driven tests: capability missing, cooldown active and expired, override, unknown name.
 
 ## T25. Verification step
 

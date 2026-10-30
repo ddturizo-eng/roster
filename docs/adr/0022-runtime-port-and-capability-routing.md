@@ -56,3 +56,6 @@ router.
 - The orchestrator is still tested with a fake runtime and a fake sandbox.
 - With only `claude-code` enabled, quota exhaustion means no runtime is available until the cooldown
   ends (ADR 0028).
+- Implementation order: the router is built after the walking skeleton (task T17 of spec 002). Until
+  then the orchestrator uses `claude-code` directly and honors its cooldown, which is the same result
+  with a single runtime.

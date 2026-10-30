@@ -56,8 +56,8 @@ current-issue file.
 ## 3. Decisions and hypotheses
 
 Decisions are recorded in ADRs 0015-0029. The following are **hypotheses** the plan depends on.
-The spike task T14 (`needs-human`) validates H2-H7 before the adapters that depend on them are
-finished. T06 validates H1. T24, T29 and T40 (real runs) validate H8-H10.
+The spike task T14 (`needs-human`) runs first, before any other task, with throwaway files, and
+validates H2-H7 before the images and adapters that depend on them are built. T06 validates H1. T24, T29 and T40 (real runs) validate H8-H10.
 
 | Id | Hypothesis | If false |
 | --- | --- | --- |
@@ -237,7 +237,7 @@ start
  │    none ─► exit 0 "nothing to do"
  ├─ task has no approved agent ─► hiring step (ADR 0027)
  │    reuse approved agent ─► continue │ hire PR ─► task waiting_hire, exit │ failure ─► blocked
- ├─ router picks runtime (ADR 0022) ── none (cooldown) ─► exit 0
+ ├─ router picks runtime (ADR 0022; until T17: claude-code unless in cooldown) ── none ─► exit 0
  ├─ pipeline (section 8)
  └─ release lock, exit 0
 ```
@@ -533,20 +533,22 @@ container/devops, Windows/PowerShell, docs. `hr-director` assigns the specialist
 | Approval fatigue. | Whole plans are approved in one merge; hires once per profile. |
 | Merged Roster improvements do not reach scheduled runs until reinstall. | Intended (ADR 0025); `doctor` shows how far behind the pinned install is. |
 
-## 17. Open questions for the human
+## 17. Answers from the human (2026-10-30)
 
-1. **Unblocking a task.** The spec says a blocked task stops with its question but not how the human
-   answers. Proposed: `roster retry <task> [--note <answer>]` (section 7.7). Accept?
-2. **Dependency approval.** Proposed: a changed manifest stops the task with an approval request; the
-   human approves with `roster retry <task> --approve-dependencies`, which lets the next run install
-   from those exact manifests in the setup container (ADR 0024). Alternative: push the change as a
-   draft PR and treat the merge as the approval, without installing before the merge.
-3. **Code review verdict.** Proposed: the review never blocks the PR; its verdict and findings go at
-   the top of the PR description. Should `request_changes` instead stop the task?
-4. **Toolchains of the other projects.** The runtime image ships Node 24. Which stacks do your 1-2 apps
-   use? A project can name its own image later; building other images is not in this spec.
-5. **Verification failure.** Proposed: no PR; the branch is pushed so the work survives; the task is
-   `failed` with the failing command. Accept?
-6. **PR closed without merge.** Proposed: task `rejected`; it waits for `roster retry`. Accept?
-7. **Night window.** Reuse 22:00-06:00 America/Bogota, 5 runs 2 h apart, `maxRunsPerNight = 5`?
-8. **Grilling rounds.** Proposed: at most 3 rounds of questions before the spec draft must be written.
+The human accepted every proposal below. Question 4 stays open.
+
+1. **Unblocking a task:** `roster retry <task> [--note <answer>]` (section 7.7). Accepted.
+2. **Dependency approval:** `roster retry <task> --approve-dependencies` (ADR 0024). Accepted; no draft-PR
+   approval.
+3. **Code review verdict:** never blocks the PR; verdict and findings go at the top of the PR
+   description. Accepted.
+4. **Toolchains of the other projects:** open. The runtime image ships Node 24 only; a project can name
+   its own image in a later spec.
+5. **Verification failure:** no PR; the branch is pushed; the task is `failed` with the failing
+   command. Accepted.
+6. **PR closed without merge:** task `rejected`; it waits for `roster retry`. Accepted.
+7. **Night window:** 22:00-06:00 America/Bogota, 5 runs 2 h apart, `maxRunsPerNight = 5`. Accepted.
+8. **Grilling rounds:** at most 3 rounds before the spec draft is written. Accepted.
+
+Order changes accepted the same day: the spike T14 runs first, and the runtime router T17 moves after
+the walking skeleton (T24).
