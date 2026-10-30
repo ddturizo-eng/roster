@@ -1,6 +1,6 @@
 # 0001. Linear as the source of truth for progress
 
-- Status: Accepted
+- Status: Superseded by 0011
 - Date: 2026-10-29
 - Deciders: human
 
