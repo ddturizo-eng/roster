@@ -67,7 +67,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T02. Domain types, ports and fakes
 
-- [ ] Done
+- [x] Done
 - Depends on: T01
 - Profile: TS core
 - Agent: roster-core-ts-engineer
