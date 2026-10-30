@@ -1,6 +1,6 @@
 # 0013. Quota exhaustion saves work on the agent branch and returns the issue to Todo
 
-- Status: Accepted
+- Status: Superseded by 0028
 - Date: 2026-10-29
 - Deciders: architect (pending human)
 

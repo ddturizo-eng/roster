@@ -1,6 +1,6 @@
 # 0006. GitHub Actions as the dispatcher's scheduler and runner
 
-- Status: Accepted
+- Status: Superseded by 0015
 - Date: 2026-10-29
 - Deciders: architect (pending human)
 

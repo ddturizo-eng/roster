@@ -1,6 +1,6 @@
 # Spec 002 — Local core MVP
 
-- Status: Ready for approval (approved when the PR that contains it is merged)
+- Status: Approved (2026-10-30, PR #2 merged)
 - Date: 2026-10-30
 - Author: human + Claude
 - Supersedes: spec 001

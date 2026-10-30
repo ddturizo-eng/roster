@@ -1,6 +1,6 @@
 # 0007. Claude Code headless in CI, authenticated with a subscription OAuth token
 
-- Status: Accepted
+- Status: Superseded by 0016
 - Date: 2026-10-29
 - Deciders: architect (pending human)
 
