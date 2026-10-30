@@ -1,41 +1,57 @@
-# Roster — instrucciones para agentes
+# Roster — agent instructions
 
-Sistema de orquestación de agentes asíncronos. Un Project Manager parte objetivos en tickets de Linear,
-un Director de RRHH contrata especialistas a demanda, y cada especialista ejecuta y reporta en su ticket.
+Async agent orchestration. A Project Manager splits goals into Linear issues, an HR Director hires
+on-demand specialists, and each specialist executes and reports on its own issue.
 
-Este archivo es neutral al harness. Claude Code lo lee vía `CLAUDE.md`; OpenCode lo lee directo.
+This file is harness-neutral. Claude Code reads it through `CLAUDE.md`; OpenCode reads it directly.
 
-## Fuentes de verdad
+## Sources of truth
 
-- **Estado del trabajo:** Linear (servidor MCP `linear`). Nada se da por hecho si no está en un ticket.
-- **Qué construir:** `specs/<feature>/spec.md`, aprobada por el humano.
-- **Cómo y por qué:** `specs/<feature>/plan.md` y `docs/adr/`.
-- **Reglas fijas:** `specs/constitution.md`.
+- **Work status:** Linear (MCP server `linear`). Nothing is assumed unless it is in an issue.
+- **What to build:** `specs/<feature>/spec.md`, approved by the human.
+- **How and why:** `specs/<feature>/plan.md` and `docs/adr/`.
+- **Fixed rules:** `specs/constitution.md`.
 
-## Reglas para todo agente
+## Language
 
-1. Antes de trabajar, lee `specs/constitution.md`, los ADRs de `docs/adr/` y tu ticket completo.
-2. No contradigas un ADR aceptado. Si hace falta cambiarlo, pide al agente `architect` un ADR nuevo que lo reemplace.
-3. Trabaja solo en el alcance de tu ticket. Lo que encuentres fuera, déjalo como comentario o ticket nuevo.
-4. Nunca hagas push a `main`. Trabaja en una rama `agent/<id-del-ticket>` y abre PR.
-5. Nunca uses credenciales de producción, pagos ni datos personales. Esos tickets llevan `needs-human`.
-6. Si el ticket es ambiguo, pregunta en un comentario y muévelo a Blocked. No adivines.
-7. Al terminar, comenta en el ticket: qué hiciste, cómo lo verificaste, link al PR. Mueve el estado a In Review.
+- Everything persisted is written in **English**: specs, plans, ADRs, agent definitions, skills,
+  code, comments, commits, PRs, and Linear issue titles and descriptions.
+- Talk to the human in **their language** (`human_language` in `specs/constitution.md`): chat replies,
+  questions in Blocked comments, and progress summaries addressed to them.
+- The human may write specs, issues or comments in their language. Translate them to English before
+  work starts, keep the meaning, and ask about anything ambiguous instead of guessing.
 
-## Flujo SDD
+## Rules for every agent
 
-constitution → spec (aprobada) → plan + ADRs → tasks → tickets en Linear → implementación → PR → revisión humana.
+1. Before working, read `specs/constitution.md`, the ADRs in `docs/adr/`, and your full issue.
+2. Do not contradict an accepted ADR. To change one, ask the `architect` agent for a new ADR that supersedes it.
+3. Stay within your issue's scope. Anything you find outside it becomes a comment or a new issue.
+4. Never push to `main`. Work on a branch `agent/<issue-id>` and open a PR.
+5. Never use production credentials, payments or personal data. Those issues carry `needs-human`.
+6. If the issue is ambiguous, ask in a comment and move it to Blocked. Do not guess.
+7. When done, comment on the issue: what you did, how you verified it, the PR link. Move it to In Review.
 
-## Roles base
+## SDD flow
 
-| Agente | Archivo | Hace | Nunca hace |
+constitution → spec (approved) → plan + ADRs → tasks → Linear issues → implementation → PR → human review.
+
+## Base roles
+
+| Agent | File | Does | Never does |
 | --- | --- | --- | --- |
-| project-manager | `agents/project-manager.md` | Convierte `tasks.md` en tickets y sigue el avance | Escribir código |
-| hr-director | `agents/hr-director.md` | Elige y define el especialista de cada ticket | Ejecutar el ticket |
-| architect | `agents/architect.md` | Escribe `plan.md` y los ADRs | Implementar |
+| project-manager | `agents/project-manager.md` | Turns `tasks.md` into issues and tracks progress | Write code |
+| hr-director | `agents/hr-director.md` | Picks and defines the specialist for each issue, with its skills | Execute the issue |
+| architect | `agents/architect.md` | Writes `plan.md`, `tasks.md` and the ADRs | Implement |
 
-## Agentes contratados
+## Hired agents
 
-- La definición neutral vive en `agents/<slug>.md`. Es la única que se edita a mano.
-- Después de que `hr-director` cree o cambie un agente, corre `scripts/sync-agents.ps1` para copiarlo a `.claude/agents/`.
-- Claude Code carga los agentes nuevos al iniciar sesión. En la misma sesión, usa el contenido del `.md` como prompt de un subagente general.
+- The neutral definition lives in `agents/<slug>.md`. It is the only copy edited by hand or by agents.
+- After `hr-director` creates or changes an agent, run `scripts/sync-agents.ps1` to copy it to `.claude/agents/`.
+- Claude Code loads new agents at session start. In the same session, use the `.md` content as the prompt of a general subagent.
+
+## Skills
+
+- A specialist preloads skills through the `skills:` field of its frontmatter.
+- Only skills with status `approved` in `skills/registry.md` may be listed. Approved skills live in `.claude/skills/<name>/`.
+- Need a skill that is not approved? Add it to the registry as `proposed` and label the issue `needs-human`.
+- Never download or install a skill on your own: skills can run scripts, so a human reviews each one first.

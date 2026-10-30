@@ -1,24 +1,29 @@
-# Constitución del proyecto
+# Project constitution
 
-Reglas que ninguna spec, plan ni agente puede saltarse. Cambiarlas requiere un ADR.
+Rules no spec, plan or agent may skip. Changing them requires an ADR.
 
-## Principios
+## Settings
 
-1. **Documentar antes de ejecutar.** Ningún ticket se implementa sin una spec aprobada por el humano.
-2. **Linear es la fuente de verdad del avance.** El repo es la fuente de verdad de specs, decisiones y código.
-3. **Especialistas a demanda.** Cada ticket lo ejecuta el perfil más específico posible, definido por `hr-director`.
-4. **Mínimo privilegio.** Cada agente recibe solo las herramientas que su ticket necesita.
-5. **Humano en las compuertas.** El humano aprueba specs, agentes nuevos (la primera vez) y merges a `main`.
-6. **Neutral al harness.** Nada depende de un solo harness; las instrucciones viven en `AGENTS.md` y `agents/`.
+- `human_language`: `es` (Spanish). Agents talk to the human in this language.
 
-## Restricciones actuales
+## Principles
 
-- Suscripción de IA: solo Claude Pro, usada desde Claude Code. Sin API keys.
-- Un agente ejecutor a la vez, para no agotar la cuota.
-- Herramientas de pago: solo Claude Pro y GitHub Pro. Linear en plan gratis.
+1. **Document before executing.** No issue is implemented without a spec approved by the human.
+2. **Linear is the source of truth for progress.** The repo is the source of truth for specs, decisions and code.
+3. **On-demand specialists.** Each issue is executed by the most specific profile possible, defined by `hr-director`.
+4. **Least privilege.** Each agent gets only the tools and skills its issue needs.
+5. **Human at the gates.** The human approves specs, new agents (the first time), new skills and merges to `main`.
+6. **Harness-neutral.** Nothing depends on a single harness; instructions live in `AGENTS.md` and `agents/`.
+7. **English-first.** Everything persisted is in English; conversation with the human is in `human_language`.
 
-## Definición de terminado (todo ticket)
+## Current constraints
 
-- Cumple los criterios de aceptación del ticket.
-- Tiene verificación descrita (test, comando o captura).
-- PR abierto contra `main` y comentario de cierre en Linear.
+- AI subscription: Claude Pro only, used from Claude Code. No API keys.
+- One executing agent at a time, to avoid exhausting the quota.
+- Paid tools: Claude Pro and GitHub Pro only. Linear on the free plan.
+
+## Definition of done (every issue)
+
+- Meets the issue's acceptance criteria.
+- Describes its verification (test, command or screenshot).
+- Has a PR open against `main` and a closing comment in Linear.

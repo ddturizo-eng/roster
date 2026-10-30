@@ -1,26 +1,32 @@
 # Roster
 
-Orquestación de agentes asíncronos: un Project Manager, un Director de RRHH que contrata
-especialistas a demanda, y Linear como fuente de verdad. Diseño en
-[Sistema de orquestación de agentes asíncronos](https://claude.ai/artifact/1KXrNH9rHu6qPCGCqeEaMd).
+Async AI agent orchestration: a PM agent turns specs into Linear tickets, an HR agent hires on-demand
+specialists for each one. Spec-driven, ADR-backed, harness-agnostic. Built on Claude Code.
 
-## Estructura
+Repository content is in English; agents talk to the human in their own language (Spanish by default).
 
-| Ruta | Qué es |
+## Layout
+
+| Path | What it is |
 | --- | --- |
-| `AGENTS.md` | Reglas para todo agente (neutral al harness) |
-| `CLAUDE.md` | Importa `AGENTS.md` para Claude Code |
-| `.mcp.json` | Servidor MCP oficial de Linear |
-| `specs/constitution.md` | Reglas fijas del proyecto |
-| `specs/<feature>/` | `spec.md`, `plan.md`, `tasks.md` de cada feature |
+| `AGENTS.md` | Rules for every agent (harness-neutral) |
+| `CLAUDE.md` | Imports `AGENTS.md` for Claude Code |
+| `.mcp.json` | Official Linear MCP server |
+| `specs/constitution.md` | Fixed project rules |
+| `specs/<feature>/` | `spec.md`, `plan.md`, `tasks.md` per feature |
 | `docs/adr/` | Architecture Decision Records (MADR) |
-| `agents/` | Definiciones neutrales de agentes |
-| `scripts/sync-agents.ps1` | Copia `agents/` a `.claude/agents/` |
+| `agents/` | Neutral agent definitions |
+| `skills/registry.md` | Curated list of skills specialists may use |
+| `scripts/sync-agents.ps1` | Copies `agents/` to `.claude/agents/` |
 
-## Puesta en marcha (Fase 1)
+## Getting started (Phase 1)
 
-1. Crea un workspace gratis en Linear con estados Backlog, Todo, In Progress, In Review, Blocked, Done,
-   y labels `agent:*` y `needs-human`.
-2. Abre Claude Code en esta carpeta y aprueba el servidor `linear` de `.mcp.json`; inicia sesión por OAuth con `/mcp`.
-3. Corre `scripts/sync-agents.ps1` y reinicia la sesión para cargar los agentes.
-4. Escribe tu primera spec en `specs/<feature>/spec.md`, apruébala, y pide al agente `architect` el plan.
+1. Create a free Linear workspace with statuses Backlog, Todo, In Progress, In Review, Blocked, Done,
+   the `needs-human` label and an `agent` label group.
+2. Open Claude Code in this folder, approve the `linear` server from `.mcp.json`, and sign in with `/mcp`.
+3. Run `scripts/sync-agents.ps1` and restart the session to load the agents.
+4. Write a spec in `specs/<feature>/spec.md`, approve it, and ask the `architect` agent for the plan.
+
+## License
+
+[MIT](LICENSE)
