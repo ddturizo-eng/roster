@@ -2,7 +2,7 @@
 
 - Spec: `specs/002-local-core/spec.md`
 - Plan: `specs/002-local-core/plan.md`
-- ADRs: 0015-0029 (Accepted 2026-10-30, PR #3)
+- ADRs: 0015-0029 (Accepted 2026-10-30, PR #3), 0030 (Accepted 2026-10-30)
 - Format: machine-readable, ADR 0019. Roster imports this file with `roster feature import`.
 - Status: Approved (2026-10-30, PR #3)
 
@@ -73,6 +73,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Areas: `src/core/domain/`, `src/ports/`, `test/fakes/`
 - Acceptance criteria:
   - `core/domain` defines the types of plan 002 sections 5 and 14: Project, Feature, Stage, Step, Task, TaskStatus, Execution, ExecutionStatus, JobKind, JobProfile, Capability, AgentDefinition, the five result contracts, ApprovalRequest, and typed error classes with a stable `name`.
+  - `core/domain` also defines `RateLimitSnapshot` (ADR 0030: `status`, `limitType`, 5-hour and 7-day `utilization` and `resetsAt` as ISO 8601 UTC, `observedAt`; every field except `observedAt` optional) and the `RuntimeOutcome.detail` fields `rateLimit?: RateLimitSnapshot`, `quotaResetsAt?: string` and `quotaWindow?: string`.
   - Result validators for the five contracts of ADR 0026, hand-written, returning either the typed value or a list of errors with JSON paths; free-text fields are length-limited.
   - Ports as TypeScript interfaces: RuntimePort (ADR 0022), SandboxPort, VcsPort, ForgePort, StorePort, SecretsPort, ClockPort, ConsolePort, FileSystemPort.
   - One fake per port in `test/fakes/`, recording calls in order, with scriptable responses.
@@ -145,10 +146,11 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Agent: roster-sqlite-store-engineer
 - Areas: `src/adapters/store/sqlite/`, tests
 - Acceptance criteria:
-  - Tables `executions`, `execution_steps`, `execution_events`, `approval_requests`, `runtime_state` as in plan 002 section 5, added by a new migration.
-  - StorePort methods: start, update step, finish execution; append event; request and resolve approvals; read and set runtime cooldown; count executions started inside a time window; list latest executions per feature.
+  - Tables `executions`, `execution_steps`, `execution_events`, `approval_requests`, `runtime_state` as in plan 002 section 5, added by a new migration, including the rate-limit columns of `executions` and `cooldown_source` and `cooldown_window` of `runtime_state` (ADR 0030).
+  - StorePort methods: start, update step, finish execution; append event; request and resolve approvals; read and set runtime cooldown (with `cooldown_until`, source and window); count executions started inside a time window; list latest executions per feature.
+  - StorePort methods `recordRateLimit(executionId, snapshot)`, which overwrites the execution's previous snapshot, and `latestRateLimit(runtime)`, which returns the most recently observed snapshot of that runtime with its execution id, or none.
   - Execution ids follow `<yyyymmddhhmmss>-<6 hex>`.
-- Verification: tests on a temporary database: full lifecycle of an execution with steps and events, window count, cooldown read/write.
+- Verification: tests on a temporary database: full lifecycle of an execution with steps and events, window count, cooldown read/write with both sources, snapshot overwrite within one execution, latest snapshot across executions, and null columns when no snapshot was recorded.
 
 ## T08. Policy module and policy files
 
@@ -263,8 +265,10 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - `managed-settings.ts` generates the managed settings of plan 002 section 9.5 from the agent's capabilities and the policy: managed-only rules and hooks, `dontAsk`, bypass disabled, connectors disabled, allow rules per capability, the deny list, `WebFetch` denied.
   - `buildInvocation(job)` returns image, argv and files for `/roster/in` as in plan 002 section 9.5, with the flag changes recorded by T14; `--bare` can never appear (test).
   - `interpret(exit, logPath)` parses the `stream-json` log and returns `completed`, `quota_exhausted` (patterns in one exported constant), `timeout`, `error` or `stopped`.
+  - For every outcome, `interpret` puts the last `rate_limit_event` of the log in `detail.rateLimit` (ADR 0030): `rate_limit_info.status`, `rateLimitType`, and `utilization` and `resetsAt` of `unifiedWindows.five_hour` and `seven_day`, with epoch seconds converted to ISO 8601 UTC. Missing or malformed fields are left out; no event leaves `rateLimit` undefined; parsing never changes the outcome kind.
+  - For `quota_exhausted`, `detail.quotaResetsAt` is the latest `resetsAt` among the window named by `rateLimitType` (its `unifiedWindows` entry, else the top-level `resetsAt`) and every window with `utilization >= 1`, and `detail.quotaWindow` names that window; both undefined when no reset time is available. The adapter applies no fallback.
   - Reading `/roster/out/result.json` and validating it is left to the orchestrator.
-- Verification: unit tests with the T14 fixture and synthetic fixtures for each outcome; snapshot of the generated managed settings for each capability set.
+- Verification: unit tests with the T14 fixtures and synthetic fixtures for each outcome; the `success-pong.jsonl` fixture yields status `allowed`, type `five_hour`, utilization 0.04 and 0.6 and both reset times; synthetic quota fixtures cover a 5-hour exhaustion, a 7-day exhaustion (7-day reset and window `seven_day` chosen) and a stream with no `rate_limit_event` (no `quotaResetsAt`); snapshot of the generated managed settings for each capability set.
 
 ## T18. Sync of task PR states
 
@@ -309,7 +313,8 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Runtime resolution in the skeleton: the only runtime is `claude-code`; while its
     `runtime_state.cooldown_until` is in the future, the run exits 0 with "quota cooldown". The
     capability router replaces this in T17.
-- Verification: unit test asserting the exact ordered list of side effects and store updates for the happy path and for "nothing to do".
+  - Runtime jobs go through one helper that, right after `interpret` and whatever the outcome, stores `detail.rateLimit` on the execution with `recordRateLimit` when present (ADR 0030). Later jobs (review, hire, stage jobs) reuse it.
+- Verification: unit test asserting the exact ordered list of side effects and store updates for the happy path (including the rate-limit record) and for "nothing to do".
 
 ## T21. Orchestrator: stop, failure, quota and recovery paths
 
@@ -324,9 +329,11 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Protected path or path outside the allowed ones ─► commit kept locally, task `blocked`, approval request `protected_path` naming the paths and the local branch; nothing pushed.
   - Changed dependency manifests ─► commit kept locally, task `blocked`, approval request `dependencies` with the manifest hash; nothing pushed.
   - `quota_exhausted` ─► ADR 0028: WIP commit, guarded push without PR, task `todo`, runtime cooldown.
+  - Cooldown length (ADR 0030): `cooldown_until = detail.quotaResetsAt` with source `resets_at` and window `detail.quotaWindow` when it is later than now and at most 8 days after now; otherwise `now + quotaCooldownMinutes` with source `fallback` and no window. `quota_exhausted_at` is now in both cases.
+  - The rate-limit snapshot is recorded on the execution on every path of this task that ran a runtime job, including `quota_exhausted`, `timeout` and `error`.
   - Start-of-run recovery: an execution left `running` by a dead PID ─► `interrupted`, task `failed`, sandbox `kill` called.
   - The range check of step 9 covers commits from earlier resumed runs.
-- Verification: one unit test per path asserting final states, events, message template and the absence of push or PR where required.
+- Verification: one unit test per path asserting final states, events, message template and the absence of push or PR where required; cooldown tests with a fake clock for a 5-hour reset, a 7-day reset, a missing reset, a reset in the past and a reset more than 8 days ahead (the last three use the fallback).
 
 ## T22. CLI wiring: `run`, `feature import`, `sync`, `doctor`
 
@@ -558,8 +565,9 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - After verification passes and before the push, a `code-reviewer` job runs in the `review` profile (work tree read-only) with the diff `origin/main..HEAD`, the task's acceptance criteria and the list of ADR paths in `/roster/in`.
   - The verdict and findings go at the top of the PR body, grouped by severity.
   - A review error or invalid result does not block the PR; the PR body says the review is missing and why.
-  - Review `quota_exhausted` follows ADR 0028.
-- Verification: unit tests for approve, request_changes, invalid result and quota, asserting the PR body and step order.
+  - Review `quota_exhausted` follows ADR 0028, with the cooldown length of ADR 0030 (T21).
+  - The review job runs through the job helper of T20, so its rate-limit snapshot replaces the agent job's snapshot on the execution.
+- Verification: unit tests for approve, request_changes, invalid result and quota, asserting the PR body and step order, and that the stored snapshot after a review is the review job's.
 
 ## Phase E — Visibility and control
 
@@ -572,9 +580,11 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Areas: `src/cli/commands/status.ts`, `src/core/orchestrator/status.ts`, tests
 - Acceptance criteria:
   - Implements plan 002 section 7.5: stage and step per feature, each task with its state (ready computed), PR links, pending questions and approval requests in `human_language`, latest executions with task, agent, runtime, start, end, status, log directory and PR.
+  - Per runtime, shows the latest rate-limit snapshot (ADR 0030): status, limit type, 5-hour and 7-day utilization as percentages with their reset times in local time, when it was observed and in which execution; "no data" when none was recorded.
+  - Per runtime, shows an active cooldown with its end in local time, source (`resets_at` or `fallback`) and window.
   - Read-only: performs no sync and no writes; shows the last sync time.
   - Filters by project and feature.
-- Verification: snapshot tests from a seeded store in `es` and `en`.
+- Verification: snapshot tests from a seeded store in `es` and `en`, including a store with a recorded snapshot and a 7-day cooldown, and a store with no snapshot.
 
 ## T38. `roster stop`
 
@@ -601,6 +611,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Acceptance criteria:
   - `README.md` describes Roster as of spec 002 (no Linear), the layout and the commands.
   - `docs/runbook.md`: install and update of the pinned version, token setup and rotation, PAT repo list, Docker Desktop settings, scheduler, power settings for night runs, reading `roster status`, unblocking tasks, troubleshooting by symptom (Docker down, quota cooldown, protected path stop, dependency approval, interrupted run).
+  - The quota cooldown entry explains the 5-hour and 7-day windows, the `fallback` source, and how to read the recorded utilization to tune `maxRunsPerNight` (ADR 0030).
   - Every command, path and setting named exists in the code or the plan.
 - Verification: link check; the PR lists each command named and the file that implements it.
 

@@ -4,6 +4,7 @@
 - Date: 2026-10-30
 - Deciders: architect, human
 - Supersedes: 0013
+- Amended by: 0030
 
 ## Context
 
