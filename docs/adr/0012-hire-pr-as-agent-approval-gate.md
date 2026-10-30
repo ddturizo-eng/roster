@@ -1,6 +1,6 @@
 # 0012. A merged hire PR is the human approval of a new or changed agent
 
-- Status: Accepted
+- Status: Superseded by 0027
 - Date: 2026-10-29
 - Deciders: architect (pending human)
 

@@ -1,6 +1,6 @@
 # 0009. The dispatcher owns side effects; headless agents report through a result file
 
-- Status: Accepted
+- Status: Superseded by 0026
 - Date: 2026-10-29
 - Deciders: architect (pending human)
 
