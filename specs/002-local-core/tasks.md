@@ -83,7 +83,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T03. Machine config and human-language messages
 
-- [ ] Done
+- [x] Done
 - Depends on: T02
 - Profile: TS core
 - Agent: roster-core-ts-engineer
