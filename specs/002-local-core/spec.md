@@ -1,6 +1,6 @@
 # Spec 002 — Local core MVP
 
-- Status: Draft (pending human approval)
+- Status: Ready for approval (approved when the PR that contains it is merged)
 - Date: 2026-10-30
 - Author: human + Claude
 - Supersedes: spec 001
@@ -49,7 +49,8 @@ Roster's own repository is a registered project like any other, so Roster can bu
 - [ ] From an idea, an analyst agent produces open questions and, after the human's answers, a spec
       draft in `specs/<feature>/spec.md` of the project repo.
 - [ ] From an approved spec, the `architect` produces `plan.md`, `tasks.md` and the ADRs.
-- [ ] Every gate (spec, plan) requires an explicit human approval that is recorded with its date.
+- [ ] Every gate (spec, plan) requires an explicit human approval: the human merges the PR that
+      contains the spec or the plan. Roster detects the merge and records its date.
 
 ### Tasks
 
@@ -92,27 +93,51 @@ Roster's own repository is a registered project like any other, so Roster can bu
 - Runtimes other than Claude Code (only the adapter interface exists).
 - Several tasks in parallel.
 - Autonomous merges, deploys and database migrations.
-- Configurable autonomy levels L0-L3 (the MVP uses one fixed policy, see open question 3).
+- Configurable autonomy levels L0-L3 (the MVP uses one fixed policy, see Decisions).
 - Memory beyond the project's versioned documents and the execution log.
 - C4 diagram generation.
 - Any Linear integration, and multi-user features.
 
-## Open questions (to answer before approval)
+### Decisions (answered by the human on 2026-10-30)
 
-1. **Status UI in the MVP.** Is `roster status` in the terminal enough while the dashboard does not
-   exist, or do you want a minimal read-only web page in this spec?
-2. **Runtime credentials inside the container.** Claude Code needs its login inside the container, and
-   the agent could read it. Proposal: a token from `claude setup-token` passed as an environment
-   variable, plus a network egress allowlist that only reaches the provider's API. Do you accept this
-   risk, or prefer another option?
-3. **Fixed policy for the MVP.** Proposal: automatic read, write inside the worktree and run tests;
-   installing dependencies needs approval; commit, push and PR done only by Roster; no deletes outside
-   the worktree, no migrations, no deploys. Is this right?
-4. **Where approvals happen.** Option A: `roster approve <feature>` in the CLI. Option B: merging the
-   PR that contains the spec or the plan counts as approval (like ADR 0012). Which one?
-5. **Grilling answers.** Answered interactively in the terminal, or by editing a questions file?
-6. **Code review step.** Should a code-reviewer agent review each diff before the PR in this MVP, or
-   later?
-7. **Provider terms (hypothesis).** Unattended, scheduled use of the Claude Pro subscription through
-   the official Claude Code CLI must be checked against Anthropic's current terms before the first
-   night run.
+- **Interface:** CLI only in this spec. The web UI comes later in its own spec.
+- **Runtime credentials:** a token from `claude setup-token` reaches the container as the
+  `CLAUDE_CODE_OAUTH_TOKEN` environment variable. The container's network egress only allows the
+  provider's API. The human accepts that the agent could read this token.
+- **Fixed MVP policy:** reading, writing inside the worktree and running tests are automatic.
+  Installing dependencies needs human approval. Only Roster commits, pushes and opens PRs. No deletes
+  outside the worktree, no migrations, no deploys.
+- **Grilling:** questions are asked interactively in the terminal and the answers are recorded.
+- **Code review:** in scope (see the criterion below).
+- **Approvals:** merging the PR that contains a spec or a plan is its approval, the same mechanism as
+  ADR 0012. There is no separate approval command.
+
+### Code review
+
+- [ ] Before the PR is opened, a code-reviewer agent reviews the diff against the task's acceptance
+      criteria and the project's ADRs, and its findings are included in the PR description.
+
+### Provider terms (checked 2026-10-30)
+
+Sources: Anthropic Consumer Terms (effective 2025-10-08), Claude Code "Legal and compliance" and
+"Authentication" docs.
+
+- The Consumer Terms forbid automated access "except when you are accessing our Services via an
+  Anthropic API Key or where we otherwise explicitly permit it".
+- The Claude Code docs explicitly offer `claude setup-token` "for CI pipelines, scripts, or other
+  environments where interactive browser login isn't available", on Pro, Max, Team or Enterprise plans.
+- Subscription OAuth is meant for "ordinary use of Claude Code"; Pro and Max limits "assume ordinary,
+  individual usage". Developers building products or services for others must use API keys, and may
+  not offer Claude.ai login or route requests through subscription credentials on behalf of users.
+
+Reading (not legal advice): Roster fits the permitted case because it is personal, has one user, and
+runs the unmodified Claude Code CLI with the human's own token. These constraints follow:
+
+- [ ] Roster runs the official, unmodified `claude` binary. It does not call the API with the
+      subscription token, and it does not use the Agent SDK with subscription credentials.
+- [ ] Roster never reads Claude credential files (for example `.credentials.json`). It only passes on
+      the `CLAUDE_CODE_OAUTH_TOKEN` the human provides, stored outside every workspace and outside git.
+- [ ] Roster does not run Claude Code in `--bare` mode, which ignores `CLAUDE_CODE_OAUTH_TOKEN`.
+- [ ] Usage stays individual: one execution at a time and a bounded number of runs per night.
+- [ ] If Roster is ever used by anyone other than the human, a new ADR is needed: each user brings
+      their own credentials, or Roster switches to API keys.
