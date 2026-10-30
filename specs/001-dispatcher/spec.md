@@ -1,6 +1,6 @@
 # Spec 001 — Async dispatcher
 
-- Status: Draft (pending human approval)
+- Status: Approved (2026-10-29)
 - Date: 2026-10-29
 - Author: human + Claude
 
@@ -42,8 +42,8 @@ assigned specialist, and leaves the result as a PR for review.
 - Linear webhooks (Phase 3).
 - Cost metrics per issue.
 
-## Open questions
+## Decisions (approved with the spec)
 
-- How often does it run? Proposal: every 2 h at night, to respect Claude Pro's 5 h window.
-- What happens if the quota runs out mid-issue? Proposal: the issue goes back to Todo with a comment.
-- Is a failed issue retried? Proposal: no; it stays in Blocked for human review.
+- **Schedule:** every 2 h at night, to respect Claude Pro's 5 h window.
+- **Quota runs out mid-issue:** the issue goes back to Todo with a comment.
+- **Failed issues:** not retried; it stays in Blocked for human review.
