@@ -8,7 +8,7 @@
   Superseded by them: 0006, 0007, 0009, 0012, 0013.
   Kept: 0002, 0003, 0004, 0005, 0008 (amended by 0017), 0010 (extended by 0022), 0014.
 - Status: Approved (2026-10-30, PR #3). ADRs 0015-0030 Accepted. ADR 0031 (live activity view) Accepted
-  Proposed 2026-10-30.
+  2026-10-30.
 
 ## 1. Summary
 
