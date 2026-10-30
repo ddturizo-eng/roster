@@ -5,7 +5,7 @@
 - Author: architect
 - ADRs: 0015-0029 (all Proposed). Superseded by them: 0006, 0007, 0009, 0012, 0013.
   Kept: 0002, 0003, 0004, 0005, 0008 (amended by 0017), 0010 (extended by 0022), 0014.
-- Status: Proposed. The ADRs must be Accepted before T01 starts.
+- Status: Approved (2026-10-30, PR #3). ADRs 0015-0029 Accepted.
 
 ## 1. Summary
 

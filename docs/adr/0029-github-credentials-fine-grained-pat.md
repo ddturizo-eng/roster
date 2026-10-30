@@ -1,8 +1,8 @@
 # 0029. GitHub access for Roster through a fine-grained PAT limited to registered repos
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 
 ## Context
 

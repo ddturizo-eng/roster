@@ -1,8 +1,8 @@
 # 0021. AgentDefinition v2: capabilities, runtimes and an output contract in flat frontmatter
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 
 ## Context
 

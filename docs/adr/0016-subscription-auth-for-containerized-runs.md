@@ -1,8 +1,8 @@
 # 0016. Subscription authentication for local and containerized Claude Code runs
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 - Supersedes: 0007
 
 ## Context

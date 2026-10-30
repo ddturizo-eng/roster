@@ -1,8 +1,8 @@
 # 0017. Modular monolith on Node 24 with ports and adapters; SQLite through `node:sqlite`
 
-- Status: Proposed
+- Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
-- Deciders: architect (pending human)
+- Deciders: architect, human
 - Amends: 0008 (code location only; the rest of 0008 stands)
 
 ## Context

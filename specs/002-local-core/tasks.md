@@ -2,9 +2,9 @@
 
 - Spec: `specs/002-local-core/spec.md`
 - Plan: `specs/002-local-core/plan.md`
-- ADRs: 0015-0029 (must be Accepted before T01 starts)
+- ADRs: 0015-0029 (Accepted 2026-10-30, PR #3)
 - Format: machine-readable, ADR 0019. Roster imports this file with `roster feature import`.
-- Status: Proposed
+- Status: Approved (2026-10-30, PR #3)
 
 Each task is about 2 h of agent work, ends with a PR against `main` from `agent/002-<Tnn>`, and checks
 its own `Done` box in that PR (constitution, definition of done). `Depends on` is the authoritative
@@ -53,6 +53,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: none
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `package.json`, `package-lock.json`, `tsconfig.json`, `vitest.config.ts`, `src/`, `test/`, `.github/workflows/ci.yml`
 - Acceptance criteria:
   - `package.json` at the repo root: name `roster`, `"type": "module"`, `"engines": { "node": ">=24" }`, no runtime dependencies, dev dependencies `typescript`, `vitest`, `@types/node` only, lockfile committed.
@@ -68,6 +69,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T01
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/domain/`, `src/ports/`, `test/fakes/`
 - Acceptance criteria:
   - `core/domain` defines the types of plan 002 sections 5 and 14: Project, Feature, Stage, Step, Task, TaskStatus, Execution, ExecutionStatus, JobKind, JobProfile, Capability, AgentDefinition, the five result contracts, ApprovalRequest, and typed error classes with a stable `name`.
@@ -82,6 +84,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/messages/`, `src/cli/config.ts`, tests
 - Acceptance criteria:
   - `loadConfig(path)` reads `%LOCALAPPDATA%\Roster\config.json` with keys from ADR 0018 (`rosterRepo`, `workspaceRoot`, `maxRunsPerNight` default 5, `quotaCooldownMinutes` default 300, `workspaceRetentionDays` default 14, `commitAuthor`, `enabledRuntimes` default `["claude-code"]`, `nightWindow` default 22:00-06:00) and fails with a message that lists every invalid or missing key.
@@ -95,6 +98,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/dag/`, `test/fixtures/tasks/`, tests
 - Acceptance criteria:
   - Parses the format of ADR 0019: task headings, `Done` checkbox, `Depends on`, `Needs human`, `Agent`, `Profile`, `Areas`, `Acceptance criteria`, `Verification`; other level-2 headings end a task; unknown keys produce warnings.
@@ -110,6 +114,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/agents/`, tests
 - Acceptance criteria:
   - Parses the flat frontmatter of ADR 0021 (one `key: value` per line, comma lists, dotted keys, `#` comments) and returns the definition and the body; anything else is an error naming the line.
@@ -123,6 +128,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS adapters
+- Agent: roster-sqlite-store-engineer
 - Areas: `src/adapters/store/sqlite/`, tests
 - Acceptance criteria:
   - Uses `node:sqlite` only; opens one file; enables WAL and foreign keys; any experimental warning is suppressed for this module only and the suppression is documented in code.
@@ -136,6 +142,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T06
 - Profile: TS adapters
+- Agent: roster-sqlite-store-engineer
 - Areas: `src/adapters/store/sqlite/`, tests
 - Acceptance criteria:
   - Tables `executions`, `execution_steps`, `execution_events`, `approval_requests`, `runtime_state` as in plan 002 section 5, added by a new migration.
@@ -148,6 +155,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/policy/`, `policies/mvp.json`, `policies/protected-paths.json`, tests (protected paths)
 - Acceptance criteria:
   - `policies/mvp.json` holds the operation classes, limits, timeouts per profile, `providerHosts` (`api.anthropic.com`), `registryHosts` (`registry.npmjs.org`) and default dependency manifests of ADR 0024.
@@ -162,6 +170,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/projects.ts`, tests
 - Acceptance criteria:
   - Reads every `projects/*.json` from `origin/main` of the Roster repo through `VcsPort.showFile` and validates the format of plan 002 section 6 (`name`, `repoPath`, `remote` as `https://github.com/<owner>/<repo>`, `defaultBranch` `main`, `setup`, `verify`, `dependencyManifests`, `protectedPaths`, `image`).
@@ -174,6 +183,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS adapters
+- Agent: roster-boundary-adapters-engineer
 - Areas: `src/adapters/vcs/git/`, `src/adapters/vcs/push-guard.ts`, tests (protected path: `push-guard.ts`)
 - Acceptance criteria:
   - `createWorkspace(project, executionId)` clones from the project's local path into a separate git dir and work tree, removes any `.git` entry from the work tree, sets `origin` to the GitHub remote and fetches.
@@ -188,6 +198,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02
 - Profile: TS adapters
+- Agent: roster-boundary-adapters-engineer
 - Areas: `src/adapters/forge/github/`, tests
 - Acceptance criteria:
   - `ensurePr({ repo, branch, title, body })` reuses an open PR for the branch or creates one against `main`; returns number and URL.
@@ -202,6 +213,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T03
 - Profile: Windows/PowerShell
+- Agent: roster-windows-powershell-engineer
 - Areas: `src/adapters/secrets/dpapi/`, `src/adapters/console/tty/`, `src/cli/commands/auth.ts`, tests
 - Acceptance criteria:
   - `set(name, value)` and `get(name)` for `claude-oauth-token` and `github-token`, stored under `%LOCALAPPDATA%\Roster\secrets\` with DPAPI (current user) through `powershell.exe -NoProfile -NonInteractive`; the value travels through stdin, never through arguments.
@@ -215,6 +227,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T01, T14
 - Profile: container/devops
+- Agent: roster-container-devops-engineer
 - Areas: `container/runtime-claude/`, `container/egress-proxy/`, tests (protected paths)
 - Acceptance criteria:
   - `container/runtime-claude/Dockerfile`: `node:24-bookworm-slim` pinned by digest, user `agent` uid 1000, Claude Code CLI at a pinned version (build argument with a default), auto-update disabled, `ripgrep` and `ca-certificates`, no `git`, no `gh`, working directory `/workspace`.
@@ -229,6 +242,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T02, T08, T13, T14
 - Profile: TS adapters
+- Agent: roster-boundary-adapters-engineer
 - Areas: `src/adapters/sandbox/docker/`, tests (protected path: `isolation.ts`)
 - Acceptance criteria:
   - `isolation.ts` builds the full `docker run` argument list for the four profiles `agent`, `review`, `setup`, `verify` exactly as in plan 002 section 9: user, read-only root, tmpfs, `--cap-drop ALL`, `no-new-privileges`, limits from policy, mounts (and nothing else), network, `--dns 0.0.0.0`, environment by name only.
@@ -243,6 +257,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T05, T08, T14
 - Profile: TS adapters
+- Agent: roster-boundary-adapters-engineer
 - Areas: `src/adapters/runtime/claude-code/`, `test/fixtures/claude/`, tests (protected path: `managed-settings.ts`)
 - Acceptance criteria:
   - `managed-settings.ts` generates the managed settings of plan 002 section 9.5 from the agent's capabilities and the policy: managed-only rules and hooks, `dontAsk`, bypass disabled, connectors disabled, allow rules per capability, the deny list, `WebFetch` denied.
@@ -256,6 +271,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T07, T11
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/sync.ts`, tests
 - Acceptance criteria:
   - `sync()` fetches the Roster repo and every registered project, refreshes registrations (T09), and reads the state of every task PR Roster has not yet seen closed.
@@ -268,6 +284,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T04, T07, T09, T10
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/import.ts`, tests
 - Acceptance criteria:
   - `importFeature(project, "NNN-slug")` requires `spec.md`, `plan.md` and `tasks.md` on `origin/main`, records the stages `idea` to `plan_approved` in order with the commit that brought each file to `main` as evidence, imports `tasks.md` and moves the feature to `execution`.
@@ -281,6 +298,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T03, T07, T08, T10, T11, T15, T16, T18, T19
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/run.ts`, `src/core/orchestrator/prompt.ts`, tests
 - Acceptance criteria:
   - With injected ports, runs plan 002 section 8 steps 1, 3, 4, 5, 6, 9, 10 and 11 (setup, verify and review come in T25, T26 and T36): workspace, agent job, result validation, policy check, commit, push, PR, record.
@@ -298,6 +316,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T20
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/`, tests
 - Acceptance criteria:
   - Result `blocked` ─► task `blocked` with the agent's questions; nothing pushed.
@@ -314,6 +333,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T12, T21
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/cli/`, tests
 - Acceptance criteria:
   - `roster run [--dry-run]` implements plan 002 section 7.4: lock with PID, interrupted recovery, `maxRunsPerNight` window, Docker check (exit 2), sync, one unit of work, exit 0 on every handled outcome and non-zero only on Roster bugs.
@@ -327,6 +347,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T22
 - Profile: Windows/PowerShell
+- Agent: roster-windows-powershell-engineer
 - Areas: `scripts/install.ps1`, `src/cli/commands/doctor.ts`, tests (protected path: `scripts/install.ps1`)
 - Acceptance criteria:
   - `scripts/install.ps1 [-Update]` clones or fast-forwards the Roster repo's `origin/main` into `%LOCALAPPDATA%\Roster\app` at a given or latest commit, refuses if the target has local changes, runs `npm ci --omit=dev`, builds both images tagged with the commit, and writes `%LOCALAPPDATA%\Roster\bin\roster.cmd`.
@@ -340,6 +361,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Depends on: T14, T23
 - Needs human: credentials, repository settings, Docker Desktop and Windows setup, real run
 - Profile: container/devops
+- Agent: roster-container-devops-engineer
 - Areas: GitHub settings, `%LOCALAPPDATA%\Roster\`, `projects/roster.json`
 - Acceptance criteria:
   - The human runs `claude setup-token` and `roster auth set claude`; creates the fine-grained PAT of ADR 0029 for the Roster repo and runs `roster auth set github`.
@@ -358,6 +380,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T05, T07, T24
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/router/`, `src/cli/runtimes.ts`, `src/core/orchestrator/`, tests
 - Acceptance criteria:
   - `selectRuntime({ agent, enabled, runtimes, state, now })` implements ADR 0022: first preferred, enabled, capable runtime not in cooldown; otherwise a typed "none" with the reason.
@@ -371,6 +394,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T24
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/verify.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
   - After the commit, each project `verify` command runs in the `verify` profile (no network, no token); exit codes and the last 50 lines of output are recorded as a step and in the log directory.
@@ -384,6 +408,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T25
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/setup.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
   - Before the agent job, the project's `setup` commands run in the `setup` profile only when the work tree's dependency manifests equal `origin/main` or their SHA-256 matches a resolved `dependencies` approval for the task.
@@ -397,6 +422,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T26
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/cli/commands/retry.ts`, `src/core/orchestrator/retry.ts`, tests
 - Acceptance criteria:
   - `roster retry <task> [--note <text>] [--approve-dependencies]` moves a `blocked`, `failed`, `stopped` or `rejected` task to `todo` and refuses any other state.
@@ -410,6 +436,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T24
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/hire.ts`, `src/core/orchestrator/run.ts`, `src/core/orchestrator/sync.ts`, tests
 - Acceptance criteria:
   - Implements ADR 0027: hr-director job on a fresh Roster repo workspace with the task text, the target project's stack files and approved skills in `/roster/in`.
@@ -424,6 +451,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T24
 - Profile: Windows/PowerShell
+- Agent: roster-windows-powershell-engineer
 - Areas: `src/adapters/scheduler/windows/`, `src/cli/commands/schedule.ts`, `src/cli/commands/doctor.ts`, tests
 - Acceptance criteria:
   - `roster schedule install` registers task `Roster\run` through PowerShell `ScheduledTasks` cmdlets with the triggers of ADR 0015 from `nightWindow`, "run only when user is logged on", wake to run, start when available, 110 minute limit, action `%LOCALAPPDATA%\Roster\bin\roster.cmd run`.
@@ -439,6 +467,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T24
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/lifecycle/`, `src/core/orchestrator/lifecycle.ts`, tests
 - Acceptance criteria:
   - Pure `transition(feature, event)` implements ADR 0020 stages and steps and rejects skipped or backward stage moves with a typed error.
@@ -453,6 +482,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Depends on: T05
 - Needs human: changes protected paths (`agents/**`, `scripts/sync-agents.ps1`); the human pushes the branch
 - Profile: docs
+- Agent: roster-agent-definitions-engineer
 - Areas: `agents/*.md`, `scripts/sync-agents.ps1`, `AGENTS.md`
 - Acceptance criteria:
   - Every file in `agents/` uses the v2 frontmatter of ADR 0021 with capabilities, runtimes and contract; `architect` uses contract `architect`, `hr-director` uses `hr` and its template produces v2 files.
@@ -467,6 +497,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Depends on: T28, T31
 - Needs human: the human reviews and merges the hire PRs
 - Profile: docs
+- Agent: hr-director
 - Areas: `agents/analyst.md`, `agents/code-reviewer.md`
 - Acceptance criteria:
   - `hr-director` defines `analyst` (capabilities `read`, `edit`; contract `analyst`; asks questions in `human_language`, writes only `specs/<feature>/spec.md` from the spec template used in this repo).
@@ -479,6 +510,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T30, T32
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/cli/commands/feature-new.ts`, `src/core/orchestrator/analysis.ts`, `src/adapters/console/tty/`, tests
 - Acceptance criteria:
   - Implements plan 002 section 7.2: idea from file or stdin, next free `NNN`, stages `idea` then `analysis`, analyst questions job, interactive questions and answers in the terminal, every question and answer stored.
@@ -492,6 +524,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T30, T31
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/sync.ts`, `src/core/orchestrator/stage-jobs.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
   - Sync: spec PR merged ─► `spec_approved`/`plan_job_pending` with the merge date; plan PR merged ─► `plan_approved`, then import, then `execution`, or `import_failed` with the parser's errors; all tasks `done` or `cancelled` ─► `delivered`.
@@ -504,6 +537,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T24
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/cli/commands/project-add.ts`, `src/core/orchestrator/projects.ts`, tests
 - Acceptance criteria:
   - Implements plan 002 section 7.1: validates repo, `origin` URL, token access and `main` protection; writes `projects/<name>.json` in a fresh Roster repo workspace; commits; pushes `agent/project-<name>`; opens PR `project: register <name>`.
@@ -518,6 +552,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T25, T32
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/review.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
   - After verification passes and before the push, a `code-reviewer` job runs in the `review` profile (work tree read-only) with the diff `origin/main..HEAD`, the task's acceptance criteria and the list of ADR paths in `/roster/in`.
@@ -533,6 +568,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T30
 - Profile: TS core
+- Agent: roster-core-ts-engineer
 - Areas: `src/cli/commands/status.ts`, `src/core/orchestrator/status.ts`, tests
 - Acceptance criteria:
   - Implements plan 002 section 7.5: stage and step per feature, each task with its state (ready computed), PR links, pending questions and approval requests in `human_language`, latest executions with task, agent, runtime, start, end, status, log directory and PR.
@@ -545,6 +581,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T24
 - Profile: TS adapters
+- Agent: roster-core-ts-engineer
 - Areas: `src/cli/commands/stop.ts`, `src/core/orchestrator/stop.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
   - Implements plan 002 section 7.6: sets `stop_requested_at`, calls `SandboxPort.kill`, waits up to 30 s for the run process to finalize, otherwise finalizes itself.
@@ -559,6 +596,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - [ ] Done
 - Depends on: T29, T34, T36, T37, T38
 - Profile: docs
+- Agent: technical-writer
 - Areas: `README.md`, `docs/runbook.md`, `AGENTS.md`
 - Acceptance criteria:
   - `README.md` describes Roster as of spec 002 (no Linear), the layout and the commands.
@@ -572,6 +610,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Depends on: T26, T27, T28, T29, T33, T34, T35, T36, T37, T38, T39
 - Needs human: real runs on a sandbox project with real credentials
 - Profile: container/devops
+- Agent: roster-container-devops-engineer
 - Areas: a sandbox GitHub repo registered with Roster
 - Acceptance criteria:
   - A sandbox project is registered with `roster project add` and the PR is merged.
