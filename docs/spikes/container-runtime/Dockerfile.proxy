@@ -1,0 +1,6 @@
+# Throwaway spike image (T14). Not product code: T13 builds the real proxy from the findings.
+FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+COPY proxy.mjs /proxy/proxy.mjs
+USER 1000:1000
+EXPOSE 3128
+ENTRYPOINT ["node", "/proxy/proxy.mjs"]

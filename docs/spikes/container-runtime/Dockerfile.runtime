@@ -1,0 +1,18 @@
+# Throwaway spike image (T14). Not product code: T13 builds the real image from the findings.
+FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+
+ARG CLAUDE_CODE_VERSION=2.1.314
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ripgrep ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+ && npm cache clean --force \
+ && usermod -l agent -d /home/agent node \
+ && groupmod -n agent node \
+ && mkdir -p /workspace /etc/claude-code \
+ && chown 1000:1000 /workspace
+
+ENV DISABLE_AUTOUPDATER=1
+USER 1000:1000
+WORKDIR /workspace

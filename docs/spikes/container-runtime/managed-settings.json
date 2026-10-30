@@ -1,0 +1,11 @@
+{
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedHooksOnly": true,
+  "disableClaudeAiConnectors": true,
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "disableBypassPermissionsMode": "disable",
+    "allow": ["Read", "Grep", "Glob"],
+    "deny": ["Bash", "WebFetch", "Edit", "Write"]
+  }
+}

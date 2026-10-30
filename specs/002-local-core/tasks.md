@@ -31,7 +31,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T14. Spike: Claude Code headless in a container on Docker Desktop
 
-- [ ] Done
+- [x] Done
 - Depends on: none (runs first, before any other task)
 - Needs human: needs Docker Desktop, a real `claude setup-token` token and real runs
 - Profile: container/devops
