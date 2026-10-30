@@ -2,9 +2,10 @@
 
 - Spec: `specs/002-local-core/spec.md`
 - Plan: `specs/002-local-core/plan.md`
-- ADRs: 0015-0029 (Accepted 2026-10-30, PR #3), 0030 (Accepted 2026-10-30)
+- ADRs: 0015-0029 (Accepted 2026-10-30, PR #3), 0030 (Accepted 2026-10-30), 0031 (Proposed 2026-10-30)
 - Format: machine-readable, ADR 0019. Roster imports this file with `roster feature import`.
-- Status: Approved (2026-10-30, PR #3)
+- Status: Approved (2026-10-30, PR #3). Amended 2026-10-30: T41 (`roster watch`) added, with hooks
+  in T04, T15, T39 and T40.
 
 Each task is about 2 h of agent work, ends with a PR against `main` from `agent/002-<Tnn>`, and checks
 its own `Done` box in that PR (constitution, definition of done). `Depends on` is the authoritative
@@ -107,7 +108,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Cycle detection rejects the import and names one cycle in order (`T03 -> T07 -> T05 -> T03`).
   - `isReady(task, tasksById)` and `selectNext(features, tasks)` implement ADR 0019 readiness and selection.
   - `planReimport(existing, parsed)` returns the changes of ADR 0019 re-import rules, including the rejection when a removed task is running or in review.
-  - Parsing `specs/002-local-core/tasks.md` itself yields 40 tasks and no errors.
+  - Parsing `specs/002-local-core/tasks.md` itself yields 41 tasks and no errors.
 - Verification: table-driven tests for each rule and error; a fixture with a three-node cycle; the real file of this plan as a fixture.
 
 ## T05. AgentDefinition v2 reader
@@ -248,11 +249,12 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Areas: `src/adapters/sandbox/docker/`, tests (protected path: `isolation.ts`)
 - Acceptance criteria:
   - `isolation.ts` builds the full `docker run` argument list for the four profiles `agent`, `review`, `setup`, `verify` exactly as in plan 002 section 9: user, read-only root, tmpfs, `--cap-drop ALL`, `no-new-privileges`, limits from policy, mounts (and nothing else), network, `--dns 0.0.0.0`, environment by name only.
-  - `SandboxPort.run(invocation)` creates the per-execution internal network, starts the proxy with the profile's allowlist, runs the job container, streams stdout and stderr to the log file with secret redaction, kills it at the timeout, and removes network and proxy at the end, also on errors.
+  - `SandboxPort.run(invocation)` creates the per-execution internal network, starts the proxy with the profile's allowlist, runs the job container, writes its stdout and stderr to the job's log files with secret redaction (next criterion), kills it at the timeout, and removes network and proxy at the end, also on errors.
+  - Job logs follow ADR 0031: stdout goes to `<log_dir>\<job>.jsonl` for runtime jobs (`agent`, `review`) or `<job>.log` for `setup` and `verify`, and stderr to `<job>.stderr.log`, where `<job>` is the job's `execution_steps` step. Output is split into complete lines; each line is redacted and appended as soon as it is complete, and an unterminated last line is redacted and flushed when the job ends. Apart from redaction, `.jsonl` lines are the runtime's raw `stream-json` lines, and nothing else is written into them. Files are opened without exclusive sharing, so another process (`roster watch`) can read them while they are written.
   - `kill(executionId)` kills every container named `roster-<execution-id>-*` and removes the network.
   - `available()` runs `docker info` with a 20 s timeout.
   - Environment values reach only the `docker` child process; none appear in any argument.
-- Verification: unit tests with a stubbed runner asserting the exact argument lists per profile, the absence of extra mounts and of `GH_TOKEN`, timeout kill and cleanup; an opt-in integration test (`ROSTER_DOCKER_IT=1`).
+- Verification: unit tests with a stubbed runner asserting the exact argument lists per profile, the absence of extra mounts and of `GH_TOKEN`, timeout kill and cleanup; log tests: a secret split across two output chunks is redacted, a redacted `stream-json` line still parses as JSON, stderr never reaches the `.jsonl` file, and a second reader sees each complete line before the job ends; an opt-in integration test (`ROSTER_DOCKER_IT=1`).
 
 ## T16. Claude Code runtime adapter
 
@@ -599,18 +601,40 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Works from a second terminal while `roster run` holds the lock; does nothing harmful when no execution is running.
 - Verification: unit tests with fakes for stop during the agent step, between steps, and with a dead run process.
 
+## T41. `roster watch`: live activity view
+
+- [ ] Done
+- Depends on: T15, T16, T17, T37
+- Profile: TS core
+- Agent: roster-core-ts-engineer
+- Areas: `src/core/domain/`, `src/ports/`, `src/adapters/runtime/claude-code/activity.ts`, `src/core/watch/`, `src/core/messages/`, `src/cli/commands/watch.ts`, `src/cli/log-follow.ts`, `src/adapters/store/sqlite/` (read queries only), `test/fixtures/claude/`, tests
+- Acceptance criteria:
+  - Implements plan 002 section 7.12 and ADR 0031. `core/domain` defines `ActivityEvent` (`start`, `tool`, `denied`, `tool_error`, `rate_limit`, `result`, each with an optional time); `RuntimePort` gets the optional member `activity`, a pure reducer `(state, line) => { state, events }`.
+  - `src/adapters/runtime/claude-code/activity.ts` is pure and translates one `stream-json` line at a time: `system` `init` ─► `start` with CLI version, model and permission mode; each `tool_use` item of an `assistant` line ─► `tool` with its target: `file_path` relative to `/workspace` for `Read`, `Edit`, `Write` and `NotebookEdit`, the first line of `command` for `Bash`, `pattern` (and `path`) for `Grep` and `Glob`, `query` for `WebSearch`, `description` for `Task`, none for other tools.
+  - A `tool_result` with `is_error: true` ─► `denied` with reason "not allowed" when its text matches a pattern in one exported constant (today `No such tool available`, spike finding 4), else `tool_error` with the first line of its text; the tool name comes from the `tool_use` id kept in the state. Successful `tool_result` content and assistant text produce no event.
+  - `rate_limit_event` ─► `rate_limit`, using the same parsing as `interpret` of T16 (shared in the adapter folder, not duplicated); `result` ─► `result` with `subtype`, `is_error`, `num_turns`, `duration_ms` and the first line of `result` or of `errors[0]`. Unknown types, malformed JSON and non-JSON lines produce no event and never throw.
+  - `core/watch` is pure: from the running (or last) execution with its task, feature and running step, the events and the current time, it renders the header (feature, task id and title, agent, runtime, job kind, current step, start time and elapsed time, rate-limit snapshot with 5-hour and 7-day utilization as percentages and reset times in local time, and when it was observed) and one line per event prefixed with the elapsed time. Labels come from `core/messages` in `human_language` (`es`, `en` fallback); tool names, paths and commands are printed verbatim.
+  - Every string taken from a log has its control characters (C0, DEL, C1, including ESC) replaced, is printed on one line, and is cut to 120 characters.
+  - The snapshot shown is the latest `rate_limit` event of the current job, else the execution's stored snapshot, else `latestRateLimit(runtime)` (T07); "no data" when there is none.
+  - `src/cli/log-follow.ts` follows a file by polling about once per second: opens it read-only, reads from the last offset, closes it, keeps an unterminated last line buffered, and starts again at offset 0 if the file shrank. It never holds the file open between polls.
+  - `roster watch [--once] [--lines <n>]` polls the store for the `running` execution and its running `execution_steps` row; follows `<log_dir>\<step>.jsonl` through the translator of `executions.runtime` (registry of T17) or `<step>.log` as plain lines; switches file when the step changes; shows "starting" while the log does not exist; on start shows the last `n` lines (default 20) of the current job.
+  - After 60 s with no new line it prints one "still running" line with the step and elapsed time. When the execution's `pid` is not alive, it says the run process is gone and the next `roster run` marks it interrupted.
+  - With no running execution it says so in `human_language`, shows the last execution's id, task, agent, status, end time, reason and PR link, and then follows the next execution that starts. `--once` prints the current view and exits 0; Ctrl+C exits 0.
+  - Read-only: does not take `run.lock`, writes nothing to the store or the logs, never calls Docker, never reads a secret (no SecretsPort), and sends no input to any process. It works from a second terminal while `roster run`, also one started by Task Scheduler, holds the lock.
+- Verification: translator tests with the three spike fixtures copied to `test/fixtures/claude/`: `managed-settings-denials.jsonl` yields `start`, `Read notes.txt`, `Bash: echo hi > /workspace/BASH_RAN`, `denied: Bash (not allowed)`, `Write WRITE_RAN.txt`, `denied: Write (not allowed)`, a rate-limit snapshot with 5-hour 0.05 and 7-day 0.6, and `result` `success` with 4 turns; `success-pong.jsonl` yields `start`, a snapshot and `result` `success` with text `pong`; `error-max-turns.jsonl` yields `Read notes.txt`, `Read .claude/settings.json` and `result` `error_max_turns` with "Reached maximum number of turns (2)"; synthetic lines cover every tool mapping, malformed JSON, a non-JSON line and an ESC sequence in a path. `core/watch` snapshot tests in `es` and `en`: running agent job, running verify job, idle with the last outcome, no rate-limit data, dead PID. Follow tests on a temporary file: appended lines, a line split across two writes, a shrunk file. CLI test with fakes for `--once`: no lock file created, no store write, no SecretsPort or SandboxPort call. The human runs `roster watch` in a second terminal during a real `roster run` and pastes the output in the PR (H11).
+
 ## Phase F — Documentation and acceptance
 
 ## T39. Documentation and operator runbook
 
 - [ ] Done
-- Depends on: T29, T34, T36, T37, T38
+- Depends on: T29, T34, T36, T37, T38, T41
 - Profile: docs
 - Agent: technical-writer
 - Areas: `README.md`, `docs/runbook.md`, `AGENTS.md`
 - Acceptance criteria:
   - `README.md` describes Roster as of spec 002 (no Linear), the layout and the commands.
-  - `docs/runbook.md`: install and update of the pinned version, token setup and rotation, PAT repo list, Docker Desktop settings, scheduler, power settings for night runs, reading `roster status`, unblocking tasks, troubleshooting by symptom (Docker down, quota cooldown, protected path stop, dependency approval, interrupted run).
+  - `docs/runbook.md`: install and update of the pinned version, token setup and rotation, PAT repo list, Docker Desktop settings, scheduler, power settings for night runs, reading `roster status`, following a run live with `roster watch`, unblocking tasks, troubleshooting by symptom (Docker down, quota cooldown, protected path stop, dependency approval, interrupted run).
   - The quota cooldown entry explains the 5-hour and 7-day windows, the `fallback` source, and how to read the recorded utilization to tune `maxRunsPerNight` (ADR 0030).
   - Every command, path and setting named exists in the code or the plan.
 - Verification: link check; the PR lists each command named and the file that implements it.
@@ -618,7 +642,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 ## T40. End-to-end acceptance
 
 - [ ] Done
-- Depends on: T26, T27, T28, T29, T33, T34, T35, T36, T37, T38, T39
+- Depends on: T26, T27, T28, T29, T33, T34, T35, T36, T37, T38, T39, T41
 - Needs human: real runs on a sandbox project with real credentials
 - Profile: container/devops
 - Agent: roster-container-devops-engineer
@@ -630,4 +654,5 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - A task with ambiguous text ends `blocked` with a Spanish question; `roster retry --note` resumes it.
   - A task that edits `.github/workflows/` stops with a protected-path request and nothing is pushed.
   - `roster stop` ends a running execution; `roster status` shows all of the above.
-- Verification: the human records execution ids, PR links and `roster status` output in this task's PR.
+  - `roster watch`, started in a second terminal, follows a scheduled run: header, one line per agent step, the job changes and the final result, with no token in its output.
+- Verification: the human records execution ids, PR links, `roster status` output and a `roster watch` excerpt in this task's PR.
