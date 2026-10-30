@@ -3,7 +3,8 @@
 - Spec: `specs/002-local-core/spec.md` (approved 2026-10-30, PR #2)
 - Date: 2026-10-30
 - Author: architect
-- ADRs: 0015-0029 (all Proposed). Superseded by them: 0006, 0007, 0009, 0012, 0013.
+- ADRs: 0015-0030 (0030 amends 0028).
+  Superseded by them: 0006, 0007, 0009, 0012, 0013.
   Kept: 0002, 0003, 0004, 0005, 0008 (amended by 0017), 0010 (extended by 0022), 0014.
 - Status: Approved (2026-10-30, PR #3). ADRs 0015-0029 Accepted.
 
@@ -44,7 +45,7 @@ Spec 001 is superseded, but its core design still fits. Reused, with the changes
 | Git ops with push guard (`git.ts`) | `adapters/vcs/git` + `push-guard.ts` | Takes a target repo; uses a separate git dir so no `.git` reaches the container; guard unchanged (only `refs/heads/agent/*`, no force). |
 | Hiring step (`hire.ts`, ADR 0012) | `core/orchestrator/hire` | State lives in the store; hire PR goes to the Roster repo (ADR 0027). |
 | Orchestrator state machine with injected ports, ordered side-effect tests (`run.ts`) | `core/orchestrator/run` | More steps (policy check, verification, review); outcomes go to the store, not Linear (ADR 0026). |
-| Quota handling: WIP commit, push branch, back to Todo (ADR 0013) | Same behavior | Back to `todo` in the store, plus a runtime cooldown (ADR 0028). |
+| Quota handling: WIP commit, push branch, back to Todo (ADR 0013) | Same behavior | Back to `todo` in the store, plus a runtime cooldown (ADR 0028) that lasts until the reset time Claude Code reports, with a fixed fallback (ADR 0030). |
 | `messages.ts` with `human_language` templates | `core/messages` | Same. Questions and stop reasons in `es`; other text in English. |
 | CLI `run`, `--dry-run`, `doctor`, `recover` | `roster run`, `doctor` | `recover` becomes automatic interrupted-execution recovery at the start of `run`. |
 | Night schedule 22:00-06:00 America/Bogota, 5 runs, 2 h apart | Windows Task Scheduler triggers | Local time, no UTC cron (ADR 0015). |
@@ -55,7 +56,7 @@ current-issue file.
 
 ## 3. Decisions and hypotheses
 
-Decisions are recorded in ADRs 0015-0029. The following are **hypotheses** the plan depends on.
+Decisions are recorded in ADRs 0015-0030. The following are **hypotheses** the plan depends on.
 The spike task T14 (`needs-human`) runs first, before any other task, with throwaway files, and
 validates H2-H7 before the images and adapters that depend on them are built. T06 validates H1. T24, T29 and T40 (real runs) validate H8-H10.
 
@@ -65,11 +66,11 @@ validates H2-H7 before the images and adapters that depend on them are built. T0
 | H2 | The official `claude` CLI, run headless (`-p`, not `--bare`) as a non-root user in a Linux container on Docker Desktop (WSL2 backend), authenticates with `CLAUDE_CODE_OAUTH_TOKEN` alone. | Stop and ask the human; no workaround that reads credential files is allowed. |
 | H3 | With egress limited to `api.anthropic.com` through an HTTPS proxy, a run completes. `platform.claude.com` may also be needed for OAuth token checks. | Add the minimum extra Anthropic host to the policy allowlist through a human PR. |
 | H4 | A managed settings file bind-mounted read-only at `/etc/claude-code/managed-settings.json` is honored, and `allowManagedPermissionRulesOnly` + `dontAsk` mode give unattended runs that never wait on a prompt. | Fall back to `--settings` + `--allowedTools` + `--disallowedTools`; isolation still holds. |
-| H5 | Quota exhaustion on Pro is recognizable in `--output-format stream-json` output (`api_retry` with `rate_limit`, or a usage-limit result text). | Misdetection ends as `failed`, which is safe (ADR 0028). |
+| H5 | Quota exhaustion on Pro is recognizable in `--output-format stream-json` output. Partly confirmed by T14: every run emits a `rate_limit_event` whose `rate_limit_info` has `status`, `rateLimitType`, `resetsAt` (epoch seconds) and `unifiedWindows.five_hour` / `seven_day` with `utilization`, `resetsAt` and `status`; only `allowed` was observed. Which value or text marks real exhaustion is still unobserved (T24, T29, T40). | Misdetection ends as `failed`, which is safe (ADR 0028). A missing or unusable `resetsAt` makes the cooldown fall back to `quotaCooldownMinutes` (ADR 0030). |
 | H6 | Bind-mounting an NTFS directory into a Linux container is fast enough for `npm ci` and `npm test` of a small project. | Move workspaces into a WSL2 path; this changes only the workspace root setting. |
 | H7 | A Docker `--internal` network gives the agent container no route and no external DNS on Docker Desktop. | Add an in-proxy check and record the gap as a risk; consider the in-container firewall option of ADR 0023. |
 | H8 | A Task Scheduler task set to "run only when the user is logged on" starts `roster run` with Docker Desktop available and DPAPI usable while the screen is locked. | The human keeps a session open; documented in the runbook. |
-| H9 | Claude Pro quota allows at least one 2 h task per 5 h window. | Lower `maxRunsPerNight`; the DAG still orders the work. |
+| H9 | Claude Pro quota allows at least one 2 h task per 5 h window, and the 7-day window does not stop the nightly runs (its utilization was already 0.6 during T14). Each execution records the 5-hour and 7-day utilization (ADR 0030), so the human can check this. | Lower `maxRunsPerNight`; the DAG still orders the work. A 7-day exhaustion pauses runs until its `resetsAt` (ADR 0030). |
 | H10 | `git push` with `gh auth git-credential` as the credential helper uses `GH_TOKEN` from the child environment. | Use a one-shot `GIT_ASKPASS` helper that reads the token from the environment. |
 
 ## 4. Architecture
@@ -111,7 +112,7 @@ src/
 
 | Adapter | Implements | Notes |
 | --- | --- | --- |
-| `runtime/claude-code` | RuntimePort | Builds the container invocation for `claude -p`, generates the managed settings file from capabilities and policy (`managed-settings.ts`, protected), parses stream-json, maps outcomes, detects quota. Never `--bare`. |
+| `runtime/claude-code` | RuntimePort | Builds the container invocation for `claude -p`, generates the managed settings file from capabilities and policy (`managed-settings.ts`, protected), parses stream-json, maps outcomes, detects quota, returns the last `rate_limit_event` snapshot and, on quota exhaustion, the reset time (ADR 0030). Never `--bare`. |
 | `sandbox/docker` | SandboxPort | Docker CLI through `execFile`. Creates the per-execution internal network, starts the egress proxy, runs job containers, streams logs to a file with secret redaction, enforces timeouts, kills by name. Isolation flags live in `isolation.ts` (protected) and cover every job profile from the start. |
 | `vcs/git` | VcsPort | Workspaces with a separate git dir, safe git config on every call, branch prepare/resume, commit, changed paths over a range, `git show` of `origin/main` blobs, push through `push-guard.ts` (protected). |
 | `forge/github` | ForgePort | `gh` CLI with `GH_TOKEN` passed only to its child process: create or reuse PR, PR state and `mergedAt`, read `main` protection for `doctor`. |
@@ -167,11 +168,11 @@ Execution ids are time-ordered: `<yyyymmddhhmmss>-<6 hex>`.
 | `grilling` | `id`, `feature_id`, `round`, `question_human`, `question_en`, `answer_human`, `asked_at`, `answered_at` | Answers recorded as typed. |
 | `tasks` | `id` PK (`<project>:<NNN>-<Tnn>`), `feature_id`, `key` (`Tnn`), `ord`, `title`, `status`, `needs_human`, `agent_slug`, `profile`, `body_md`, `source_commit`, `branch`, `pr_number`, `pr_url`, `merged_at`, `stop_reason`, `retry_note`, `updated_at` | `status` as in ADR 0020. `body_md` is the task text given to the agent. |
 | `task_dependencies` | `task_id`, `depends_on_id` | Edges of the DAG. |
-| `executions` | `id` PK, `task_id` (nullable), `feature_id`, `job_kind`, `agent_slug`, `runtime`, `status`, `started_at`, `ended_at`, `base_commit`, `head_commit`, `branch`, `pr_url`, `log_dir`, `container_name`, `result_json`, `reason`, `stop_requested_at`, `pid` | Spec fields: task, agent, runtime, start, end, status, log location, PR link. |
+| `executions` | `id` PK, `task_id` (nullable), `feature_id`, `job_kind`, `agent_slug`, `runtime`, `status`, `started_at`, `ended_at`, `base_commit`, `head_commit`, `branch`, `pr_url`, `log_dir`, `container_name`, `result_json`, `reason`, `stop_requested_at`, `pid`, `rate_limit_status`, `rate_limit_type`, `five_hour_utilization`, `five_hour_resets_at`, `seven_day_utilization`, `seven_day_resets_at`, `rate_limit_observed_at` | Spec fields: task, agent, runtime, start, end, status, log location, PR link. The `rate_limit_*`, `five_hour_*` and `seven_day_*` columns hold the latest rate-limit snapshot of any runtime job of the execution, whatever its outcome (ADR 0030); utilization is the reported fraction, reset times are ISO 8601 UTC, all null when no snapshot was seen. |
 | `execution_steps` | `execution_id`, `step` (`workspace`, `setup`, `agent`, `policy`, `commit`, `verify`, `review`, `push`, `pr`), `status`, `started_at`, `ended_at`, `detail` | One row per pipeline step. |
 | `execution_events` | `id`, `execution_id`, `at`, `type`, `payload_json` | Key events (outcome, denied egress, policy violations). The full stream is in the log file. |
 | `approval_requests` | `id`, `task_id`, `kind` (`dependencies`, `protected_path`), `detail_json`, `content_hash`, `created_at`, `resolved_at`, `resolution` | `content_hash` ties a dependency approval to exact manifest contents. |
-| `runtime_state` | `runtime` PK, `quota_exhausted_at`, `cooldown_until` | Router input (ADR 0028). |
+| `runtime_state` | `runtime` PK, `quota_exhausted_at`, `cooldown_until`, `cooldown_source` (`resets_at` \| `fallback`), `cooldown_window` (for example `five_hour`, `seven_day`; null for `fallback`) | Router input (ADR 0028). `cooldown_until` is the reset time reported by the runtime, or `quota_exhausted_at + quotaCooldownMinutes` when none is usable (ADR 0030). |
 
 ## 6. Git-side formats
 
@@ -251,7 +252,9 @@ as one unit.
 Read-only. Shows each feature's stage and step, each task with its state (ready is computed),
 open PR links, pending questions and approval requests in `human_language`, and the latest
 executions (id, task, agent, runtime, start, end, status, log directory, PR). Shows the last sync
-time; it does not sync.
+time; it does not sync. Shows, per runtime, the latest recorded rate-limit snapshot (status, limit
+type, 5-hour and 7-day utilization as percentages with their reset times, and when it was observed)
+and any active cooldown with its end, source and window (ADR 0030).
 
 ### 7.6 `roster stop [<execution-id>]`
 
@@ -315,8 +318,11 @@ Each step is recorded in `execution_steps`. Any exception after the execution st
 3. **Agent.** Write the `in\` files: `prompt.md` (task body, acceptance criteria, spec and plan paths,
    resume note, retry note, result contract, and the fact that git and network are unavailable),
    `agent.md` (definition body) and the managed settings. Run the `agent` container. Outcome from the
-   runtime adapter: `completed`, `quota_exhausted`, `timeout`, `error`, or `stopped`.
-   - `quota_exhausted` ─► WIP flow (ADR 0028), task `todo`, runtime cooldown, end.
+   runtime adapter: `completed`, `quota_exhausted`, `timeout`, `error`, or `stopped`. Whatever the
+   outcome, the rate-limit snapshot in the outcome's detail, if any, is stored on the execution
+   (ADR 0030); the same holds for every other runtime job (review, hr-director, analyst, architect).
+   - `quota_exhausted` ─► WIP flow (ADR 0028), task `todo`, runtime cooldown until the reported
+     reset time or the `quotaCooldownMinutes` fallback (ADR 0030), end.
    - `timeout`/`error` ─► `failed` with reason in `human_language`, end. Nothing pushed.
 4. **Result.** Read `out\result.json` and validate it against the job contract (ADR 0026).
    Missing or invalid ─► `failed`. `blocked` ─► task `blocked` with the agent's questions (already in
@@ -526,6 +532,7 @@ container/devops, Windows/PowerShell, docs. `hr-director` assigns the specialist
 | `node:sqlite` changes behavior (H1). | Store behind a port; migration tests; fallback option in ADR 0017. |
 | Claude Code CLI changes flags or output format. | Version pinned in the image; upgrades go through a PR; adapter tests with recorded streams. |
 | Quota exhaustion not detected (H5). | Ends as `failed`, which is safe; patterns in one constant with tests. |
+| The 7-day window is exhausted and the cooldown pauses every run for days (H9). | Intended (ADR 0030): runs would fail anyway. `roster status` shows the cooldown end and window and the per-execution 7-day utilization, so the human sees the pressure early and can lower `maxRunsPerNight`. An unusable `resetsAt` falls back to `quotaCooldownMinutes`. |
 | Docker Desktop not running or PC asleep at night. | `run` records and exits; `doctor` and runbook; Task Scheduler "wake" and "start when available". |
 | A crash leaves an execution `running`. | Lock file with PID; the next `run` marks it `interrupted` (task `failed`), kills leftover containers and removes the network. |
 | Disk fills with workspaces and logs. | Retention setting; `doctor` checks free space. |
@@ -552,3 +559,8 @@ The human accepted every proposal below. Question 4 stays open.
 
 Order changes accepted the same day: the spike T14 runs first, and the runtime router T17 moves after
 the walking skeleton (T24).
+
+Spike T14 finding 6, accepted the same day (ADR 0030): the quota cooldown lasts until the `resetsAt`
+reported by Claude Code (the 7-day reset when that window is exhausted), with `quotaCooldownMinutes`
+only as the fallback; every execution records the latest rate-limit snapshot. Whether `roster run`
+should skip work when the 7-day utilization is high stays open.
