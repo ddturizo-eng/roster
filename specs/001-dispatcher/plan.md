@@ -4,6 +4,7 @@
 - Date: 2026-10-29
 - Author: architect
 - ADRs: 0006, 0007, 0008, 0009, 0010, 0011, 0012, 0013 (all Proposed)
+- Status: Superseded with spec 001 (2026-10-30). Kept as design input for spec 002.
 
 ## Summary
 

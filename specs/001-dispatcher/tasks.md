@@ -3,6 +3,7 @@
 - Spec: `specs/001-dispatcher/spec.md`
 - Plan: `specs/001-dispatcher/plan.md`
 - ADRs: 0006-0013 (must be Accepted before T01 starts)
+- Status: Superseded with spec 001 (2026-10-30). Do not execute. Linear issues ROS-5 to ROS-19 are frozen.
 
 Each task is about 2 h of agent work, verifiable on its own, and ends with a PR against `main`.
 All code lives in `dispatcher/` unless stated. Tasks marked `needs-human` require the human

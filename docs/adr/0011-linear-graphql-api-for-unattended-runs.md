@@ -1,6 +1,6 @@
 # 0011. Linear as the source of truth; GraphQL API for unattended runs
 
-- Status: Accepted
+- Status: Superseded by 0014
 - Date: 2026-10-29
 - Deciders: architect (pending human)
 - Supersedes: 0001
