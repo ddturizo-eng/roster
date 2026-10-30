@@ -50,7 +50,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T01. Scaffold the roster package, CI and the layering test
 
-- [ ] Done
+- [x] Done
 - Depends on: none
 - Profile: TS core
 - Agent: roster-core-ts-engineer
