@@ -1,6 +1,6 @@
 # Spec 001 — Async dispatcher
 
-- Status: Approved (2026-10-29)
+- Status: Superseded by spec 002 (2026-10-30). Approved 2026-10-29. See ADR 0014 and `docs/architecture/vision.md`.
 - Date: 2026-10-29
 - Author: human + Claude
 
