@@ -1,0 +1,43 @@
+{
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedHooksOnly": true,
+  "disableClaudeAiConnectors": true,
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "disableBypassPermissionsMode": "disable",
+    "allow": [
+      "Glob",
+      "Grep",
+      "Read"
+    ],
+    "deny": [
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "Monitor",
+      "NotebookEdit",
+      "RemoteTrigger",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "Task",
+      "TaskStop",
+      "ToolSearch",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write",
+      "Bash(git push *)",
+      "Bash(npm install *)",
+      "Bash(npm i *)",
+      "Bash(pnpm add *)",
+      "Bash(yarn add *)"
+    ]
+  }
+}

@@ -52,6 +52,18 @@ export interface JobLimits {
   readonly timeoutMinutes: number;
 }
 
+/**
+ * The text of one approved skill (ADR 0005, ADR 0021), resolved by the orchestrator from the pinned
+ * install. Runtime adapters inline it into the agent's instructions (human decision on T16, option
+ * 1): no skill directory is mounted and no skill script runs.
+ */
+export interface SkillText {
+  /** The skill name as listed in the agent's `skills:`. */
+  readonly name: string;
+  /** The skill's `SKILL.md`, as read; adapters drop its frontmatter. */
+  readonly content: string;
+}
+
 /** What a runtime adapter needs to describe one agent or review job (ADR 0022). */
 export interface RuntimeJob {
   readonly executionId: string;
@@ -62,6 +74,11 @@ export interface RuntimeJob {
   /** Content of `/roster/in/prompt.md`. */
   readonly prompt: string;
   readonly limits: JobLimits;
+  /**
+   * Exactly one entry per name in `agent.skills`, and nothing else. Only skills `approved` in
+   * `skills/registry.md` of the pinned install; empty when the agent lists none.
+   */
+  readonly skills: readonly SkillText[];
 }
 
 /** A file Roster writes into the job's `in` directory, mounted read-only at `/roster/in`. */

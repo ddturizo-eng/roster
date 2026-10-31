@@ -261,7 +261,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T16. Claude Code runtime adapter
 
-- [ ] Done
+- [x] Done
 - Depends on: T05, T08, T14
 - Profile: TS adapters
 - Agent: roster-boundary-adapters-engineer
