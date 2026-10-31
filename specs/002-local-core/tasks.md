@@ -183,7 +183,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T10. Git adapter: workspaces, commits, changed paths and push guard
 
-- [ ] Done
+- [x] Done
 - Depends on: T02
 - Profile: TS adapters
 - Agent: roster-boundary-adapters-engineer
