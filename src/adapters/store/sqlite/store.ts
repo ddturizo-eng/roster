@@ -2,18 +2,38 @@
 // migrations applied in one transaction at open. Explicit SQL with bound parameters only; column
 // names in dynamic `SET` clauses come from fixed maps in this file, never from callers.
 //
-// T06 implements projects, features, grilling and tasks. T07 adds the rest of `StorePort` (executions,
-// steps, events, approvals, runtime state) with a new migration and widens `CoreStore` to `StorePort`.
+// T06 implemented projects, features, grilling and tasks. T07 added executions, steps, events,
+// approvals and runtime state (migration 2); `CoreStore` is now the whole `StorePort`.
 
+import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 import { NotFoundError, RosterError } from '../../../core/domain/errors.ts';
+import type { ApprovalDetail, ApprovalKind, ApprovalRequest, ApprovalResolution } from '../../../core/domain/approval.ts';
+import type {
+  Execution,
+  ExecutionEvent,
+  ExecutionStatus,
+  ExecutionStep,
+  ExecutionStepName,
+  ExecutionStepStatus,
+  JobKind,
+} from '../../../core/domain/execution.ts';
 import type { Feature, FeatureEvent, GrillingEntry, Stage, Step } from '../../../core/domain/feature.ts';
 import type { Project } from '../../../core/domain/project.ts';
+import type { CooldownSource, RateLimitSnapshot, RuntimeState } from '../../../core/domain/runtime.ts';
 import type { Task, TaskDependency, TaskStatus } from '../../../core/domain/task.ts';
 import type {
+  ApprovalFilter,
+  ExecutionFilter,
+  ExecutionFinish,
+  ExecutionPatch,
   FeatureTransition,
+  LatestRateLimit,
+  NewApprovalRequest,
+  NewExecution,
+  NewExecutionEvent,
   NewGrillingQuestion,
   StorePort,
   TaskFilter,
@@ -24,28 +44,8 @@ import { loadSqlite } from './load.ts';
 import { MIGRATIONS } from './migrations.ts';
 import type { Migration } from './migrations.ts';
 
-/** The part of `StorePort` implemented so far (T06). */
-export type CoreStore = Pick<
-  StorePort,
-  | 'transaction'
-  | 'close'
-  | 'upsertProject'
-  | 'getProject'
-  | 'listProjects'
-  | 'createFeature'
-  | 'getFeature'
-  | 'listFeatures'
-  | 'applyFeatureTransition'
-  | 'listFeatureEvents'
-  | 'addGrillingQuestion'
-  | 'answerGrillingQuestion'
-  | 'listGrilling'
-  | 'importTasks'
-  | 'getTask'
-  | 'listTasks'
-  | 'updateTask'
-  | 'listTaskDependencies'
->;
+/** The store contract; `SqliteStore` implements all of it since T07. */
+export type CoreStore = StorePort;
 
 export interface OpenStoreOptions {
   /** ISO 8601 UTC clock for `schema_migrations.applied_at`. Defaults to the system clock. */
@@ -72,6 +72,23 @@ const TASK_COLUMNS = {
   stopReason: 'stop_reason',
   retryNote: 'retry_note',
 } as const;
+
+const EXECUTION_COLUMNS = {
+  agentSlug: 'agent_slug',
+  runtime: 'runtime',
+  baseCommit: 'base_commit',
+  headCommit: 'head_commit',
+  branch: 'branch',
+  prUrl: 'pr_url',
+  logDir: 'log_dir',
+  containerName: 'container_name',
+  resultJson: 'result_json',
+  reason: 'reason',
+  stopRequestedAt: 'stop_requested_at',
+  pid: 'pid',
+} as const;
+
+const EXECUTION_PATCHABLE = Object.keys(EXECUTION_COLUMNS) as (keyof typeof EXECUTION_COLUMNS)[];
 
 const PATCHABLE = Object.keys(TASK_COLUMNS) as (keyof typeof TASK_COLUMNS)[];
 
@@ -145,6 +162,90 @@ const toTask = (row: Row): Task => ({
   retryNote: strOrNull(row.retry_note),
   updatedAt: str(row.updated_at),
 });
+
+function toSnapshot(row: Row): RateLimitSnapshot | null {
+  if (row.rate_limit_observed_at === null) return null;
+  const window = (utilization: unknown, resetsAt: unknown) => ({
+    ...(utilization === null ? {} : { utilization: num(utilization) }),
+    ...(resetsAt === null ? {} : { resetsAt: str(resetsAt) }),
+  });
+  const fiveHour = window(row.five_hour_utilization, row.five_hour_resets_at);
+  const sevenDay = window(row.seven_day_utilization, row.seven_day_resets_at);
+  return {
+    ...(row.rate_limit_status === null ? {} : { status: str(row.rate_limit_status) }),
+    ...(row.rate_limit_type === null ? {} : { limitType: str(row.rate_limit_type) }),
+    ...(Object.keys(fiveHour).length === 0 ? {} : { fiveHour }),
+    ...(Object.keys(sevenDay).length === 0 ? {} : { sevenDay }),
+    observedAt: str(row.rate_limit_observed_at),
+  };
+}
+
+const toExecution = (row: Row): Execution => ({
+  id: str(row.id),
+  taskId: strOrNull(row.task_id),
+  featureId: str(row.feature_id),
+  jobKind: str(row.job_kind) as JobKind,
+  agentSlug: strOrNull(row.agent_slug),
+  runtime: strOrNull(row.runtime),
+  status: str(row.status) as ExecutionStatus,
+  startedAt: str(row.started_at),
+  endedAt: strOrNull(row.ended_at),
+  baseCommit: strOrNull(row.base_commit),
+  headCommit: strOrNull(row.head_commit),
+  branch: strOrNull(row.branch),
+  prUrl: strOrNull(row.pr_url),
+  logDir: strOrNull(row.log_dir),
+  containerName: strOrNull(row.container_name),
+  resultJson: strOrNull(row.result_json),
+  reason: strOrNull(row.reason),
+  stopRequestedAt: strOrNull(row.stop_requested_at),
+  pid: numOrNull(row.pid),
+  rateLimit: toSnapshot(row),
+});
+
+const toStep = (row: Row): ExecutionStep => ({
+  executionId: str(row.execution_id),
+  step: str(row.step) as ExecutionStepName,
+  status: str(row.status) as ExecutionStepStatus,
+  startedAt: str(row.started_at),
+  endedAt: strOrNull(row.ended_at),
+  detail: strOrNull(row.detail),
+});
+
+const toEvent = (row: Row): ExecutionEvent => ({
+  id: num(row.id),
+  executionId: str(row.execution_id),
+  at: str(row.at),
+  type: str(row.type),
+  payload: JSON.parse(str(row.payload_json)) as unknown,
+});
+
+const toApproval = (row: Row): ApprovalRequest => ({
+  id: num(row.id),
+  taskId: str(row.task_id),
+  kind: str(row.kind) as ApprovalKind,
+  detail: JSON.parse(str(row.detail_json)) as ApprovalDetail,
+  contentHash: strOrNull(row.content_hash),
+  createdAt: str(row.created_at),
+  resolvedAt: strOrNull(row.resolved_at),
+  resolution: strOrNull(row.resolution) as ApprovalResolution | null,
+});
+
+const toRuntimeState = (row: Row): RuntimeState => ({
+  runtime: str(row.runtime),
+  quotaExhaustedAt: strOrNull(row.quota_exhausted_at),
+  cooldownUntil: strOrNull(row.cooldown_until),
+  cooldownSource: strOrNull(row.cooldown_source) as CooldownSource | null,
+  cooldownWindow: strOrNull(row.cooldown_window),
+});
+
+/** `<yyyymmddhhmmss>-<6 hex>`: the UTC time of `startedAt` plus three random bytes. */
+function newExecutionId(startedAt: string): string {
+  const time = new Date(startedAt);
+  if (Number.isNaN(time.getTime())) throw new StoreOperationError('startExecution', 'INVALID_TIME');
+  const stamp = time.toISOString().slice(0, 19).replace(/[-:T]/g, '');
+  return `${stamp}-${randomBytes(3).toString('hex')}`;
+}
 
 function errorCode(error: unknown): string | null {
   if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') {
@@ -510,6 +611,249 @@ export class SqliteStore implements CoreStore {
          WHERE (?1 IS NULL OR t.feature_id = ?1) ORDER BY d.rowid`,
         featureId ?? null,
       ).map((row) => ({ taskId: str(row.task_id), dependsOnId: str(row.depends_on_id) })),
+    );
+  }
+
+  // Executions
+
+  startExecution(execution: NewExecution): Execution {
+    return this.#op('startExecution', () => {
+      // Three random bytes per second: a collision is rare, so pick again a few times before failing.
+      for (let attempt = 0; ; attempt += 1) {
+        const id = newExecutionId(execution.startedAt);
+        if (attempt < 5 && this.#get('SELECT 1 AS x FROM executions WHERE id = ?', id) !== undefined) continue;
+        this.#run(
+          `INSERT INTO executions (id, task_id, feature_id, job_kind, agent_slug, runtime, status, started_at, pid)
+           VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)`,
+          id,
+          execution.taskId,
+          execution.featureId,
+          execution.jobKind,
+          execution.agentSlug,
+          execution.runtime,
+          execution.startedAt,
+          execution.pid,
+        );
+        return toExecution(this.#get('SELECT * FROM executions WHERE id = ?', id) as Row);
+      }
+    });
+  }
+
+  getExecution(id: string): Execution | undefined {
+    return this.#op('getExecution', () => {
+      const row = this.#get('SELECT * FROM executions WHERE id = ?', id);
+      return row === undefined ? undefined : toExecution(row);
+    });
+  }
+
+  updateExecution(id: string, patch: ExecutionPatch): Execution {
+    return this.#op('updateExecution', () => {
+      const sets: string[] = [];
+      const values: SQLInputValue[] = [];
+      for (const key of EXECUTION_PATCHABLE) {
+        const value = patch[key];
+        if (value === undefined) continue;
+        sets.push(`${EXECUTION_COLUMNS[key]} = ?`);
+        values.push(value);
+      }
+      if (sets.length > 0) {
+        const result = this.#run(`UPDATE executions SET ${sets.join(', ')} WHERE id = ?`, ...values, id);
+        if (result.changes === 0) throw new NotFoundError('execution', id);
+      }
+      const row = this.#get('SELECT * FROM executions WHERE id = ?', id);
+      if (row === undefined) throw new NotFoundError('execution', id);
+      return toExecution(row);
+    });
+  }
+
+  finishExecution(id: string, finish: ExecutionFinish): Execution {
+    return this.#op('finishExecution', () => {
+      const result = this.#run(
+        `UPDATE executions SET status = ?, ended_at = ?, reason = COALESCE(?, reason),
+           head_commit = COALESCE(?, head_commit), pr_url = COALESCE(?, pr_url) WHERE id = ?`,
+        finish.status,
+        finish.endedAt,
+        finish.reason ?? null,
+        finish.headCommit ?? null,
+        finish.prUrl ?? null,
+        id,
+      );
+      if (result.changes === 0) throw new NotFoundError('execution', id);
+      return toExecution(this.#get('SELECT * FROM executions WHERE id = ?', id) as Row);
+    });
+  }
+
+  listExecutions(filter: ExecutionFilter = {}): readonly Execution[] {
+    return this.#op('listExecutions', () =>
+      this.#all(
+        `SELECT e.* FROM executions e JOIN features f ON f.id = e.feature_id
+         WHERE (?1 IS NULL OR e.status = ?1) AND (?2 IS NULL OR e.feature_id = ?2)
+           AND (?3 IS NULL OR e.task_id = ?3) AND (?4 IS NULL OR f.project = ?4)
+         ORDER BY e.started_at DESC, e.id DESC LIMIT ?5`,
+        filter.status ?? null,
+        filter.featureId ?? null,
+        filter.taskId ?? null,
+        filter.project ?? null,
+        filter.limit ?? -1,
+      ).map(toExecution),
+    );
+  }
+
+  countExecutionsStarted(from: string, to: string): number {
+    return this.#op('countExecutionsStarted', () =>
+      num(
+        (this.#get('SELECT COUNT(*) AS n FROM executions WHERE started_at >= ? AND started_at < ?', from, to) as Row)
+          .n,
+      ),
+    );
+  }
+
+  recordStep(step: ExecutionStep): void {
+    this.#op('recordStep', () => {
+      this.#run(
+        `INSERT INTO execution_steps (execution_id, step, status, started_at, ended_at, detail)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(execution_id, step) DO UPDATE SET status = excluded.status,
+           started_at = excluded.started_at, ended_at = excluded.ended_at, detail = excluded.detail`,
+        step.executionId,
+        step.step,
+        step.status,
+        step.startedAt,
+        step.endedAt,
+        step.detail,
+      );
+    });
+  }
+
+  listSteps(executionId: string): readonly ExecutionStep[] {
+    return this.#op('listSteps', () =>
+      this.#all('SELECT * FROM execution_steps WHERE execution_id = ? ORDER BY rowid', executionId).map(toStep),
+    );
+  }
+
+  appendEvent(event: NewExecutionEvent): ExecutionEvent {
+    return this.#op('appendEvent', () => {
+      const inserted = this.#run(
+        'INSERT INTO execution_events (execution_id, at, type, payload_json) VALUES (?, ?, ?, ?)',
+        event.executionId,
+        event.at,
+        event.type,
+        JSON.stringify(event.payload) ?? 'null',
+      );
+      return toEvent(this.#get('SELECT * FROM execution_events WHERE id = ?', inserted.id) as Row);
+    });
+  }
+
+  listEvents(executionId: string): readonly ExecutionEvent[] {
+    return this.#op('listEvents', () =>
+      this.#all('SELECT * FROM execution_events WHERE execution_id = ? ORDER BY id', executionId).map(toEvent),
+    );
+  }
+
+  recordRateLimit(executionId: string, snapshot: RateLimitSnapshot): void {
+    this.#op('recordRateLimit', () => {
+      const result = this.#run(
+        `UPDATE executions SET rate_limit_status = ?, rate_limit_type = ?,
+           five_hour_utilization = ?, five_hour_resets_at = ?, seven_day_utilization = ?, seven_day_resets_at = ?,
+           rate_limit_observed_at = ? WHERE id = ?`,
+        snapshot.status ?? null,
+        snapshot.limitType ?? null,
+        snapshot.fiveHour?.utilization ?? null,
+        snapshot.fiveHour?.resetsAt ?? null,
+        snapshot.sevenDay?.utilization ?? null,
+        snapshot.sevenDay?.resetsAt ?? null,
+        snapshot.observedAt,
+        executionId,
+      );
+      if (result.changes === 0) throw new NotFoundError('execution', executionId);
+    });
+  }
+
+  latestRateLimit(runtime: string): LatestRateLimit | undefined {
+    return this.#op('latestRateLimit', () => {
+      const row = this.#get(
+        `SELECT * FROM executions WHERE runtime = ? AND rate_limit_observed_at IS NOT NULL
+         ORDER BY rate_limit_observed_at DESC, id DESC LIMIT 1`,
+        runtime,
+      );
+      if (row === undefined) return undefined;
+      return { executionId: str(row.id), snapshot: toSnapshot(row) as RateLimitSnapshot };
+    });
+  }
+
+  // Approvals
+
+  requestApproval(request: NewApprovalRequest): ApprovalRequest {
+    return this.#op('requestApproval', () => {
+      const inserted = this.#run(
+        `INSERT INTO approval_requests (task_id, kind, detail_json, content_hash, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        request.taskId,
+        request.kind,
+        JSON.stringify(request.detail),
+        request.contentHash,
+        request.createdAt,
+      );
+      return toApproval(this.#get('SELECT * FROM approval_requests WHERE id = ?', inserted.id) as Row);
+    });
+  }
+
+  resolveApproval(id: number, resolution: ApprovalResolution, resolvedAt: string): ApprovalRequest {
+    return this.#op('resolveApproval', () => {
+      const result = this.#run(
+        'UPDATE approval_requests SET resolution = ?, resolved_at = ? WHERE id = ?',
+        resolution,
+        resolvedAt,
+        id,
+      );
+      if (result.changes === 0) throw new NotFoundError('approval request', String(id));
+      return toApproval(this.#get('SELECT * FROM approval_requests WHERE id = ?', id) as Row);
+    });
+  }
+
+  listApprovals(filter: ApprovalFilter = {}): readonly ApprovalRequest[] {
+    return this.#op('listApprovals', () =>
+      this.#all(
+        `SELECT * FROM approval_requests
+         WHERE (?1 IS NULL OR task_id = ?1) AND (?2 IS NULL OR kind = ?2)
+           AND (?3 IS NULL OR (?3 = 1 AND resolved_at IS NULL) OR (?3 = 0 AND resolved_at IS NOT NULL))
+         ORDER BY id`,
+        filter.taskId ?? null,
+        filter.kind ?? null,
+        filter.pending === undefined ? null : filter.pending ? 1 : 0,
+      ).map(toApproval),
+    );
+  }
+
+  // Runtime state
+
+  getRuntimeState(runtime: string): RuntimeState | undefined {
+    return this.#op('getRuntimeState', () => {
+      const row = this.#get('SELECT * FROM runtime_state WHERE runtime = ?', runtime);
+      return row === undefined ? undefined : toRuntimeState(row);
+    });
+  }
+
+  setRuntimeState(state: RuntimeState): void {
+    this.#op('setRuntimeState', () => {
+      this.#run(
+        `INSERT INTO runtime_state (runtime, quota_exhausted_at, cooldown_until, cooldown_source, cooldown_window)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(runtime) DO UPDATE SET quota_exhausted_at = excluded.quota_exhausted_at,
+           cooldown_until = excluded.cooldown_until, cooldown_source = excluded.cooldown_source,
+           cooldown_window = excluded.cooldown_window`,
+        state.runtime,
+        state.quotaExhaustedAt,
+        state.cooldownUntil,
+        state.cooldownSource,
+        state.cooldownWindow,
+      );
+    });
+  }
+
+  listRuntimeStates(): readonly RuntimeState[] {
+    return this.#op('listRuntimeStates', () =>
+      this.#all('SELECT * FROM runtime_state ORDER BY runtime').map(toRuntimeState),
     );
   }
 }

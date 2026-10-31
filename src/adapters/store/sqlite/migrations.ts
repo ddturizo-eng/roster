@@ -1,5 +1,5 @@
 // Numbered migrations (plan 002 section 5). Never edit a migration that shipped: add a new one with
-// the next version. T07 adds the execution, approval and runtime tables as version 2.
+// the next version. Version 2 (T07) adds the execution, approval and runtime tables.
 
 export interface Migration {
   readonly version: number;
@@ -90,6 +90,83 @@ CREATE TABLE task_dependencies (
   PRIMARY KEY (task_id, depends_on_id)
 );
 CREATE INDEX task_dependencies_depends_on ON task_dependencies(depends_on_id);
+`,
+  },
+  {
+    version: 2,
+    name: 'executions, steps, events, approvals, runtime state',
+    sql: `
+CREATE TABLE executions (
+  id                      TEXT PRIMARY KEY,
+  task_id                 TEXT REFERENCES tasks(id),
+  feature_id              TEXT NOT NULL REFERENCES features(id),
+  job_kind                TEXT NOT NULL,
+  agent_slug              TEXT,
+  runtime                 TEXT,
+  status                  TEXT NOT NULL,
+  started_at              TEXT NOT NULL,
+  ended_at                TEXT,
+  base_commit             TEXT,
+  head_commit             TEXT,
+  branch                  TEXT,
+  pr_url                  TEXT,
+  log_dir                 TEXT,
+  container_name          TEXT,
+  result_json             TEXT,
+  reason                  TEXT,
+  stop_requested_at       TEXT,
+  pid                     INTEGER,
+  rate_limit_status       TEXT,
+  rate_limit_type         TEXT,
+  five_hour_utilization   REAL,
+  five_hour_resets_at     TEXT,
+  seven_day_utilization   REAL,
+  seven_day_resets_at     TEXT,
+  rate_limit_observed_at  TEXT
+);
+CREATE INDEX executions_feature_started ON executions(feature_id, started_at);
+CREATE INDEX executions_task ON executions(task_id);
+CREATE INDEX executions_started ON executions(started_at);
+CREATE INDEX executions_runtime_observed ON executions(runtime, rate_limit_observed_at);
+
+CREATE TABLE execution_steps (
+  execution_id TEXT NOT NULL REFERENCES executions(id),
+  step         TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  started_at   TEXT NOT NULL,
+  ended_at     TEXT,
+  detail       TEXT,
+  PRIMARY KEY (execution_id, step)
+);
+
+CREATE TABLE execution_events (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  execution_id TEXT NOT NULL REFERENCES executions(id),
+  at           TEXT NOT NULL,
+  type         TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+CREATE INDEX execution_events_execution ON execution_events(execution_id, id);
+
+CREATE TABLE approval_requests (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id      TEXT NOT NULL REFERENCES tasks(id),
+  kind         TEXT NOT NULL CHECK (kind IN ('dependencies', 'protected_path')),
+  detail_json  TEXT NOT NULL,
+  content_hash TEXT,
+  created_at   TEXT NOT NULL,
+  resolved_at  TEXT,
+  resolution   TEXT CHECK (resolution IN ('approved', 'consumed'))
+);
+CREATE INDEX approval_requests_task ON approval_requests(task_id, id);
+
+CREATE TABLE runtime_state (
+  runtime            TEXT PRIMARY KEY,
+  quota_exhausted_at TEXT,
+  cooldown_until     TEXT,
+  cooldown_source    TEXT CHECK (cooldown_source IN ('resets_at', 'fallback')),
+  cooldown_window    TEXT
+);
 `,
   },
 ];

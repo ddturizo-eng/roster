@@ -141,7 +141,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T07. SQLite store: executions, steps, events, approvals, runtime state
 
-- [ ] Done
+- [x] Done
 - Depends on: T06
 - Profile: TS adapters
 - Agent: roster-sqlite-store-engineer
