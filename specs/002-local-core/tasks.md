@@ -349,7 +349,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T20. Orchestrator: task pipeline happy path
 
-- [ ] Done
+- [x] Done
 - Depends on: T03, T07, T08, T10, T11, T15, T16, T18, T19, T42, T43, T44
 - Profile: TS core
 - Agent: roster-core-ts-engineer
