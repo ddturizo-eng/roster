@@ -45,3 +45,4 @@ export {
   SEVEN_DAY_WINDOW,
 } from './rate-limit.ts';
 export type { ParsedRateLimit, ParsedWindow, QuotaReset } from './rate-limit.ts';
+export { composeAgentInstructions, skillBody, skillHeading } from './skills.ts';

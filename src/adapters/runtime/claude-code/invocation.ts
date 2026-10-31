@@ -12,12 +12,15 @@
 //   variadic `--mcp-config` would read it as a config path (finding 1). For the same reason
 //   `--mcp-config` and its one value are always the last arguments.
 // - `--max-turns` works although `claude --help` does not list it (finding 2).
+// - `/roster/in/agent.md` is the agent body followed by the approved skills listed in its `skills:`,
+//   inlined as delimited sections (skills.ts); skills are never mounted or run.
 // - The environment names are those of the `agent` and `review` profiles of the sandbox (plan 002
 //   section 9.4); values never appear here.
 
 import type { ContainerInvocation, InFile, RuntimeJob } from '../../../core/domain/runtime.ts';
 import { RuntimeInputError } from './errors.ts';
 import { renderManagedSettings } from './managed-settings.ts';
+import { composeAgentInstructions } from './skills.ts';
 
 /** Registry name of this runtime (ADR 0022). */
 export const RUNTIME_NAME = 'claude-code';
@@ -115,9 +118,10 @@ export function buildClaudeInvocation(job: RuntimeJob, options: InvocationOption
   if (typeof job.agent.body !== 'string') throw new RuntimeInputError('agent body', 'must be text');
   const image = checkRuntimeImage(options.image);
   const argv = claudeArgv(job.limits.maxTurns, job.agent.models[RUNTIME_NAME]);
+  const instructions = composeAgentInstructions(job.agent.body, job.agent.skills, job.skills);
   const inFiles: InFile[] = [
     { name: IN_FILES.prompt, content: job.prompt },
-    { name: IN_FILES.agent, content: job.agent.body },
+    { name: IN_FILES.agent, content: instructions },
     {
       name: IN_FILES.managedSettings,
       content: renderManagedSettings({ capabilities: job.agent.capabilities, operations: options.operations }),

@@ -40,6 +40,7 @@ const job: RuntimeJob = {
   agent,
   prompt: 'Do T02.',
   limits: { maxTurns: 80, timeoutMinutes: 90 },
+  skills: [],
 };
 
 function feature(id: string, createdAt: string): Feature {

@@ -53,6 +53,7 @@ function job(overrides: Partial<RuntimeJob> = {}): RuntimeJob {
     agent: agent(),
     prompt: '# Task T16\n\nImplement the adapter.\n',
     limits: { maxTurns: 60, timeoutMinutes: 90 },
+    skills: [],
     ...overrides,
   };
 }

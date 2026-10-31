@@ -20,6 +20,9 @@
 //   available under `dontAsk`), `WebFetch` always (egress allows only the provider API), and the
 //   command rules of plan section 9.5 as a second line behind the container (finding 4: a deny rule
 //   on a bare tool name removes the tool from the session).
+// The `Skill` tool is always denied, but skills still reach the agent: the approved skills listed in
+// its `skills:` are inlined into `/roster/in/agent.md` (skills.ts, human decision on T16), so no
+// skill directory is loaded and no skill script can run.
 
 import { CAPABILITIES } from '../../../core/domain/agent.ts';
 import type { Capability } from '../../../core/domain/agent.ts';
