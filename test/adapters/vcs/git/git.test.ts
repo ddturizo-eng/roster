@@ -11,8 +11,15 @@ import {
   execFileGitRunner,
   removeGitEntries,
 } from '../../../../src/adapters/vcs/git/index.ts';
-import type { GitCall, GitRunner, GitVcs, PushGuard } from '../../../../src/adapters/vcs/git/index.ts';
-import { pushGuard } from '../../../../src/adapters/vcs/push-guard.ts';
+import type {
+  GitCall,
+  GitRunner,
+  GitVcs,
+  PushGuard,
+  PushGuardFactory,
+  PushGuardRules,
+} from '../../../../src/adapters/vcs/git/index.ts';
+import { createPushGuard } from '../../../../src/adapters/vcs/push-guard.ts';
 import {
   ExternalCommandError,
   NotFoundError,
@@ -68,6 +75,8 @@ interface Fixture {
   readonly adapterHome: string;
   readonly calls: GitCall[];
   readonly guardChecks: string[][];
+  /** Rules every call of the guard factory received, in order. */
+  readonly factoryCalls: PushGuardRules[];
   readonly vcs: GitVcs;
   readonly source: WorkspaceSource;
   /** Runs the test's own git (not the adapter) with an isolated, harmless config. */
@@ -143,6 +152,12 @@ function setup(): Fixture {
   git(seed, ['add', '--all']);
   git(seed, ['commit', '--quiet', '-m', 'init']);
   git(seed, ['tag', '-a', 'v1', '-m', 'v1']);
+  // A gitflow base branch one commit ahead of `main` (ADR 0032).
+  git(seed, ['checkout', '--quiet', '-b', 'develop']);
+  writeFileSync(join(seed, 'develop-only.txt'), 'd\n');
+  git(seed, ['add', '--all']);
+  git(seed, ['commit', '--quiet', '-m', 'develop']);
+  git(seed, ['checkout', '--quiet', 'main']);
 
   const origin = join(base, 'origin.git');
   git(base, ['clone', '--quiet', '--bare', seed, origin]);
@@ -169,6 +184,7 @@ function setup(): Fixture {
   const emptyDir = join(workspaceRoot, '.empty-hooks');
   const calls: GitCall[] = [];
   const guardChecks: string[][] = [];
+  const factoryCalls: PushGuardRules[] = [];
   const real = execFileGitRunner();
   const fixture: Fixture = {
     base,
@@ -180,9 +196,10 @@ function setup(): Fixture {
     adapterHome,
     calls,
     guardChecks,
+    factoryCalls,
     git,
     failPush: null,
-    source: { name: 'demo', repoPath: local, remoteUrl: origin },
+    source: { name: 'demo', repoPath: local, remoteUrl: origin, baseBranch: 'main', branchPrefix: 'agent' },
     vcs: undefined as unknown as GitVcs,
   };
   const runner: GitRunner = async (call) => {
@@ -192,16 +209,20 @@ function setup(): Fixture {
     }
     return real(call);
   };
-  const spyGuard: PushGuard = {
-    pushArguments: (branch) => pushGuard.pushArguments(branch),
-    assertSafePush: (argv) => {
-      guardChecks.push([...argv]);
-      pushGuard.assertSafePush(argv);
-    },
+  const spyFactory: PushGuardFactory = (rules) => {
+    factoryCalls.push(rules);
+    const guard = createPushGuard(rules);
+    return {
+      pushArguments: (branch) => guard.pushArguments(branch),
+      assertSafePush: (argv) => {
+        guardChecks.push([...argv]);
+        guard.assertSafePush(argv);
+      },
+    };
   };
   const vcs = createGitVcs({
     workspaceRoot,
-    pushGuard: spyGuard,
+    pushGuard: spyFactory,
     runner,
     env: {
       PATH: process.env.PATH,
@@ -295,9 +316,45 @@ describe('GitVcs workspaces', { timeout: 120_000 }, () => {
     const remoteRefs = wsGit(f, ws, ['for-each-ref', '--format=%(refname)', 'refs/remotes']).trim().split('\n');
     expect(remoteRefs.filter((ref) => ref !== 'refs/remotes/origin/HEAD')).toEqual([
       'refs/remotes/origin/agent/001-T01',
+      'refs/remotes/origin/develop',
       'refs/remotes/origin/main',
     ]);
     expect(markers(f)).toEqual([]);
+    // The guard factory ran once, with a frozen copy of the source's rules.
+    expect(f.factoryCalls).toEqual([{ baseBranch: 'main', branchPrefix: 'agent' }]);
+    expect(Object.isFrozen(f.factoryCalls[0])).toBe(true);
+  });
+
+  it('refuses invalid branch rules through the guard before writing or running anything', async () => {
+    const f = setup();
+    const cases: Partial<PushGuardRules>[] = [
+      { branchPrefix: 'main' },
+      { branchPrefix: 'Feature' },
+      { baseBranch: 'agent/main' },
+      { baseBranch: 'feature', branchPrefix: 'feature' },
+      { baseBranch: '-x' },
+    ];
+    for (const rules of cases) {
+      const error = await f.vcs.createWorkspace({ ...f.source, ...rules }, nextExecutionId()).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PushRejectedError);
+    }
+    expect(f.calls).toEqual([]);
+    expect(existsSync(join(f.workspaceRoot, 'demo'))).toBe(false);
+  });
+
+  it('calls the guard factory once per workspace and keeps the rules it was created with', async () => {
+    const f = setup();
+    const source = { ...f.source, baseBranch: 'develop', branchPrefix: 'feature' };
+    const ws = await f.vcs.createWorkspace(source, nextExecutionId());
+    // Changing the caller's object afterwards changes nothing in the workspace.
+    source.baseBranch = 'main';
+    source.branchPrefix = 'agent';
+    expect(await ws.prepareBranch('feature/agent-001-T02')).toEqual({ resumed: false });
+    expect(await ws.headCommit()).toBe(f.git(f.origin, ['rev-parse', 'refs/heads/develop']).trim());
+    const callsBefore = f.calls.length;
+    await expect(ws.push('agent/001-T02', FAKE_TOKEN)).rejects.toBeInstanceOf(PushRejectedError);
+    expect(f.calls.length).toBe(callsBefore);
+    expect(f.factoryCalls).toEqual([{ baseBranch: 'develop', branchPrefix: 'feature' }]);
   });
 
   it('refuses unsafe inputs before running git', async () => {
@@ -331,11 +388,30 @@ describe('GitVcs workspaces', { timeout: 120_000 }, () => {
     expect(f.calls).toEqual([]);
   });
 
-  it('requires a push guard and an absolute workspace root', () => {
-    expect(() => createGitVcs({ workspaceRoot: 'relative', pushGuard })).toThrow(GitInputError);
-    expect(() => createGitVcs({ workspaceRoot: tmpdir(), pushGuard: undefined as unknown as PushGuard })).toThrow(
+  it('requires a push guard factory and an absolute workspace root', () => {
+    expect(() => createGitVcs({ workspaceRoot: 'relative', pushGuard: createPushGuard })).toThrow(GitInputError);
+    expect(() => createGitVcs({ workspaceRoot: tmpdir(), pushGuard: undefined as unknown as PushGuardFactory })).toThrow(
       GitInputError,
     );
+    // A bound guard object instead of the factory is refused too.
+    const bound = createPushGuard({ baseBranch: 'main', branchPrefix: 'agent' });
+    expect(() => createGitVcs({ workspaceRoot: tmpdir(), pushGuard: bound as unknown as PushGuardFactory })).toThrow(
+      GitInputError,
+    );
+  });
+
+  it('refuses a factory that does not return a guard', async () => {
+    const f = setup();
+    const vcs = createGitVcs({
+      workspaceRoot: join(f.base, 'other-workspaces'),
+      pushGuard: (() => ({})) as unknown as PushGuardFactory,
+      runner: async (call) => {
+        f.calls.push(call);
+        return execFileGitRunner()(call);
+      },
+    });
+    await expect(vcs.createWorkspace(f.source, nextExecutionId())).rejects.toBeInstanceOf(GitInputError);
+    expect(f.calls).toEqual([]);
   });
 });
 
@@ -374,6 +450,65 @@ describe('GitWorkspace.prepareBranch', { timeout: 120_000 }, () => {
     ]);
     expect(await ws.headCommit()).toBe(f.git(f.origin, ['rev-parse', 'refs/heads/main']).trim());
     expect(existsSync(join(ws.paths.tree, 'c.txt'))).toBe(false);
+  });
+
+  it('creates a fresh branch from origin/develop when the base branch is develop', async () => {
+    const f = setup();
+    const ws = await f.vcs.createWorkspace({ ...f.source, baseBranch: 'develop', branchPrefix: 'feature' }, nextExecutionId());
+    f.calls.length = 0;
+
+    expect(await ws.prepareBranch('feature/agent-001-T02')).toEqual({ resumed: false });
+
+    const prefix = safe(ws.paths.gitDir, ws.paths.tree, f.emptyDir);
+    expect(f.calls.map((call) => call.args)).toEqual([
+      [...prefix, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/feature/agent-001-T02^{commit}'],
+      [...prefix, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/develop^{commit}'],
+      [...prefix, 'checkout', '--quiet', '--no-track', '-B', 'feature/agent-001-T02', 'refs/remotes/origin/develop'],
+    ]);
+    expect(await ws.headCommit()).toBe(f.git(f.origin, ['rev-parse', 'refs/heads/develop']).trim());
+    expect(readFileSync(join(ws.paths.tree, 'develop-only.txt'), 'utf8')).toBe('d\n');
+    expect(wsGit(f, ws, ['symbolic-ref', 'HEAD']).trim()).toBe('refs/heads/feature/agent-001-T02');
+  });
+
+  it('resumes a branch that exists on origin when the base branch is develop', async () => {
+    const f = setup();
+    f.git(f.local, ['fetch', '--quiet', 'origin']);
+    f.git(f.local, ['checkout', '--quiet', '-b', 'feature/agent-001-T05', 'origin/develop']);
+    write(f.local, 'e.txt', 'e\n');
+    f.git(f.local, ['add', '--all']);
+    f.git(f.local, ['commit', '--quiet', '-m', 'e']);
+    f.git(f.local, ['push', '--quiet', 'origin', 'feature/agent-001-T05']);
+    f.git(f.local, ['checkout', '--quiet', 'main']);
+
+    const ws = await f.vcs.createWorkspace({ ...f.source, baseBranch: 'develop', branchPrefix: 'feature' }, nextExecutionId());
+    f.calls.length = 0;
+    expect(await ws.prepareBranch('feature/agent-001-T05')).toEqual({ resumed: true });
+    const prefix = safe(ws.paths.gitDir, ws.paths.tree, f.emptyDir);
+    expect(f.calls.map((call) => call.args)).toEqual([
+      [...prefix, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/feature/agent-001-T05^{commit}'],
+      [
+        ...prefix,
+        'checkout',
+        '--quiet',
+        '--no-track',
+        '-B',
+        'feature/agent-001-T05',
+        'refs/remotes/origin/feature/agent-001-T05',
+      ],
+    ]);
+    expect(await ws.headCommit()).toBe(f.git(f.origin, ['rev-parse', 'refs/heads/feature/agent-001-T05']).trim());
+    expect(readFileSync(join(ws.paths.tree, 'e.txt'), 'utf8')).toBe('e\n');
+    expect(readFileSync(join(ws.paths.tree, 'develop-only.txt'), 'utf8')).toBe('d\n');
+  });
+
+  it('fails with NotFoundError naming origin/<baseBranch> when the base branch is missing', async () => {
+    const f = setup();
+    const ws = await f.vcs.createWorkspace({ ...f.source, baseBranch: 'trunk' }, nextExecutionId());
+    const error = await ws.prepareBranch('agent/001-T02').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NotFoundError);
+    expect((error as NotFoundError).id).toBe('origin/trunk');
+    expect((error as Error).message).toBe('git ref not found: origin/trunk');
+    expect(f.calls.some((call) => call.args.includes('checkout'))).toBe(false);
   });
 
   it('does not resume a branch that exists only in the local repo', async () => {
@@ -653,8 +788,47 @@ describe('GitWorkspace.push', { timeout: 120_000 }, () => {
     expect(f.git(f.origin, ['for-each-ref', '--format=%(refname)', 'refs/heads']).trim().split('\n')).toEqual([
       'refs/heads/agent/001-T01',
       'refs/heads/agent/001-T02',
+      'refs/heads/develop',
       'refs/heads/main',
     ]);
+  });
+
+  it('pushes a feature/agent- branch for a develop-based project and refuses everything else', async () => {
+    const f = setup();
+    const ws = await f.vcs.createWorkspace({ ...f.source, baseBranch: 'develop', branchPrefix: 'feature' }, nextExecutionId());
+    await ws.prepareBranch('feature/agent-001-T02');
+    write(ws.paths.tree, 'pushed.txt', 'p\n');
+    await ws.commitAll('001-T02: work', AUTHOR);
+    const head = await ws.headCommit();
+    const developBefore = f.git(f.origin, ['rev-parse', 'refs/heads/develop']).trim();
+    const mainBefore = f.git(f.origin, ['rev-parse', 'refs/heads/main']).trim();
+    const callsBefore = f.calls.length;
+
+    for (const branch of ['develop', 'main', 'master', 'agent/001-T02', 'feature/login', 'feature/agent-', 'feature/agent-x/y']) {
+      const error = await ws.push(branch, FAKE_TOKEN).catch((e: unknown) => e);
+      expect(error, branch).toBeInstanceOf(PushRejectedError);
+    }
+    expect(f.calls.length).toBe(callsBefore);
+    expect(f.guardChecks).toEqual([]);
+
+    await ws.push('feature/agent-001-T02', FAKE_TOKEN);
+    const pushCall = f.calls.at(-1);
+    expect(pushCall?.args).toEqual([
+      ...safe(ws.paths.gitDir, ws.paths.tree, f.emptyDir),
+      '-c',
+      'credential.helper=!gh auth git-credential',
+      'push',
+      '--no-verify',
+      '--no-follow-tags',
+      '--no-signed',
+      '--recurse-submodules=no',
+      'origin',
+      'refs/heads/feature/agent-001-T02:refs/heads/feature/agent-001-T02',
+    ]);
+    expect(f.guardChecks).toEqual([pushCall?.args]);
+    expect(f.git(f.origin, ['rev-parse', 'refs/heads/feature/agent-001-T02']).trim()).toBe(head);
+    expect(f.git(f.origin, ['rev-parse', 'refs/heads/develop']).trim()).toBe(developBefore);
+    expect(f.git(f.origin, ['rev-parse', 'refs/heads/main']).trim()).toBe(mainBefore);
   });
 
   it('rejects main and every name outside agent/ before running git', async () => {
@@ -675,10 +849,14 @@ describe('GitWorkspace.push', { timeout: 120_000 }, () => {
 
   it('stops when the guard rejects the final argument list', async () => {
     const f = setup();
-    const forcing: PushGuard = {
+    const forcing: PushGuardFactory = (rules) => {
+      const guard = createPushGuard(rules);
       // A broken guard version that adds --force must still be caught by the argv check.
-      pushArguments: (branch) => [...pushGuard.pushArguments(branch).slice(0, 3), '--force', ...pushGuard.pushArguments(branch).slice(3)],
-      assertSafePush: (argv) => pushGuard.assertSafePush(argv),
+      const broken: PushGuard = {
+        pushArguments: (branch) => [...guard.pushArguments(branch).slice(0, 3), '--force', ...guard.pushArguments(branch).slice(3)],
+        assertSafePush: (argv) => guard.assertSafePush(argv),
+      };
+      return broken;
     };
     const calls: GitCall[] = [];
     const vcs = createGitVcs({
