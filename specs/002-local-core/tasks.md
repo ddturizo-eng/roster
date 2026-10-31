@@ -230,7 +230,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T13. Container images and egress proxy
 
-- [ ] Done
+- [x] Done
 - Depends on: T01, T14
 - Profile: container/devops
 - Agent: roster-container-devops-engineer
