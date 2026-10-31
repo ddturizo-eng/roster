@@ -3,6 +3,8 @@
 - Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
 - Deciders: architect, human
+- Amended by: 0032 (the optional Administration read verifies protection of the base branch and of
+  `main`; Roster pushes the project's agent branches, not only `agent/*`)
 
 ## Context
 

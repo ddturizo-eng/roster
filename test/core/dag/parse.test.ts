@@ -14,7 +14,7 @@ const fixture = (name: string): string =>
 // architect amends the plan, while reading it keeps proving that the file Roster will import
 // parses. If a plan PR changes the number of tasks, update EXPECTED_REAL_TASKS in the same PR.
 const REAL_TASKS_MD = fileURLToPath(new URL('../../../specs/002-local-core/tasks.md', import.meta.url));
-const EXPECTED_REAL_TASKS = 41;
+const EXPECTED_REAL_TASKS = 44;
 
 describe('parseTasksMd: format of ADR 0019', () => {
   const result = parseTasksMd(fixture('valid.md'));
@@ -548,7 +548,7 @@ describe('the real tasks.md of plan 002', () => {
       areas: ['src/core/dag/', 'test/fixtures/tasks/'],
     });
     expect(byKey.get('T04')?.acceptanceCriteria).toHaveLength(6);
-    expect(tasks.filter((t) => t.needsHuman !== null)).toHaveLength(5);
+    expect(tasks.filter((t) => t.needsHuman !== null)).toHaveLength(6);
     // File order is the selection order: T14 was moved to the front (ADR 0019).
     expect(tasks.slice(0, 2).map((t) => t.key)).toEqual(['T14', 'T01']);
   });

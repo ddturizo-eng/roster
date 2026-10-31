@@ -28,7 +28,7 @@ This file is harness-neutral. Claude Code reads it through `CLAUDE.md`; OpenCode
 1. Before working, read `specs/constitution.md`, the ADRs in `docs/adr/`, and your full task with its spec and plan.
 2. Do not contradict an accepted ADR. To change one, ask the `architect` agent for a new ADR that supersedes it.
 3. Stay within your task's scope. Anything you find outside it becomes a note in your PR or a proposed new task.
-4. Never push to `main`. Work on a branch `agent/<feature>-<task>` (for example `agent/002-T01`) and open a PR.
+4. Never push to `main` or to the project's base branch. In the Roster repo, work on a branch `agent/<feature>-<task>` (for example `agent/002-T01`) and open a PR against `main`. In other projects, Roster uses the base branch and branch prefix of the project's registration (ADR 0032).
 5. Never use production credentials, payments or personal data. Those tasks are marked `needs-human` in `tasks.md`.
 6. If the task is ambiguous, stop and ask the human. Do not guess.
 7. When done, the PR description says what you did and how you verified it, and the PR checks the task's box in `tasks.md`.
