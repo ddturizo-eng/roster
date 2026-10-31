@@ -198,7 +198,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T11. GitHub adapter through `gh`
 
-- [ ] Done
+- [x] Done
 - Depends on: T02
 - Profile: TS adapters
 - Agent: roster-boundary-adapters-engineer
