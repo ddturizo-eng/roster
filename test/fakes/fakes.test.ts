@@ -96,7 +96,7 @@ describe('CallLog and Responses', () => {
     await workspace.prepareBranch('agent/002-T02');
     await sandbox.kill('e1');
     await workspace.push('agent/002-T02', FAKE_TOKEN);
-    await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T02', title: '002-T02: Domain', body: 'body' });
+    await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T02', base: 'main', title: '002-T02: Domain', body: 'body' });
 
     expect(log.names()).toEqual([
       'store.createFeature',
@@ -284,19 +284,28 @@ describe('FakeVcs', () => {
 });
 
 describe('FakeForge', () => {
-  it('creates and reuses PRs per branch and scripts PR states', async () => {
+  it('creates and reuses PRs per branch and base and scripts PR states', async () => {
     const forge = new FakeForge();
-    const first = await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T02', title: 't', body: 'b' });
-    const again = await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T02', title: 't', body: 'b' });
-    const other = await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T03', title: 't', body: 'b' });
+    const first = await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T02', base: 'main', title: 't', body: 'b' });
+    const again = await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T02', base: 'main', title: 't', body: 'b' });
+    const other = await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T03', base: 'main', title: 't', body: 'b' });
+    const otherBase = await forge.ensurePr({ repo: 'o/r', branch: 'agent/002-T02', base: 'develop', title: 't', body: 'b' });
     expect(first).toEqual({ number: 1, url: 'https://github.com/o/r/pull/1' });
     expect(again).toEqual(first);
     expect(other.number).toBe(2);
+    expect(otherBase.number).toBe(3);
     expect(await forge.prState('o/r', 1)).toEqual({ state: 'open' });
     forge.responses.queue('prState', { state: 'merged', mergedAt: '2026-11-02T10:00:00.000Z' });
     expect(await forge.prState('o/r', 1)).toEqual({ state: 'merged', mergedAt: '2026-11-02T10:00:00.000Z' });
-    forge.responses.queue('mainProtection', { known: false });
-    expect(await forge.mainProtection('o/r')).toEqual({ known: false });
+    expect(await forge.branchProtection('o/r', 'develop')).toEqual({ state: 'known', prRequired: true, forcePushBlocked: true });
+    forge.responses.queue('branchProtection', { state: 'unknown' }, { state: 'missing' });
+    expect(await forge.branchProtection('o/r', 'develop')).toEqual({ state: 'unknown' });
+    expect(await forge.branchProtection('o/r', 'main')).toEqual({ state: 'missing' });
+    expect(forge.log.of('forge').filter((call) => call.method === 'branchProtection').map((call) => call.args)).toEqual([
+      ['o/r', 'develop'],
+      ['o/r', 'develop'],
+      ['o/r', 'main'],
+    ]);
     expect(await forge.canRead('o/r')).toBe(true);
   });
 });

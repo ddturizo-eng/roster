@@ -117,21 +117,6 @@ async function failure(promise: Promise<unknown>): Promise<Error> {
   return error as Error;
 }
 
-const listArgs = [
-  'api',
-  '--hostname',
-  'github.com',
-  '--method',
-  'GET',
-  ...HEADERS,
-  `repos/${REPO}/pulls`,
-  '-f',
-  'state=open',
-  '-f',
-  `head=octo:${BRANCH}`,
-  '-f',
-  'base=main',
-];
 const createArgs = ['api', '--hostname', 'github.com', '--method', 'POST', ...HEADERS, `repos/${REPO}/pulls`, '--input', '-'];
 
 describe('apiArgs', () => {
@@ -161,8 +146,32 @@ describe('apiArgs', () => {
   });
 });
 
+const listArgsFor = (branch: string, base: string): string[] => [
+  'api',
+  '--hostname',
+  'github.com',
+  '--method',
+  'GET',
+  ...HEADERS,
+  `repos/${REPO}/pulls`,
+  '-f',
+  'state=open',
+  '-f',
+  `head=octo:${branch}`,
+  '-f',
+  `base=${base}`,
+];
+
+const listArgs = listArgsFor(BRANCH, 'main');
+
 describe('ensurePr', () => {
-  const request = { repo: REPO, branch: BRANCH, title: '002-T11: GitHub adapter through gh', body: 'Summary\n\n--repo evil `$(rm -rf /)`' };
+  const request = {
+    repo: REPO,
+    branch: BRANCH,
+    base: 'main',
+    title: '002-T11: GitHub adapter through gh',
+    body: 'Summary\n\n--repo evil `$(rm -rf /)`',
+  };
 
   it('reuses the open PR of the branch against main', async () => {
     const h = harness([ok([pr(7, 'agent/other'), pr(8, BRANCH, 'develop'), pr(9)])]);
@@ -185,6 +194,35 @@ describe('ensurePr', () => {
     }
     expectSafeCalls(h);
     expect(existsSync(h.configDir)).toBe(true);
+  });
+
+  it('creates a PR into develop from a prefixed agent branch, then reuses it', async () => {
+    const branch = 'feature/agent-002-T44';
+    const gitflow = { ...request, branch, base: 'develop' };
+    const created = harness([ok([]), ok(pr(21, branch, 'develop'))]);
+    expect(await created.forge.ensurePr(gitflow)).toEqual({ number: 21, url: `https://github.com/${REPO}/pull/21` });
+    expect(created.calls.map((call) => call.args)).toEqual([listArgsFor(branch, 'develop'), createArgs]);
+    expect(JSON.parse(created.calls[1]?.input ?? '')).toEqual({ title: request.title, head: branch, base: 'develop', body: request.body });
+    expectSafeCalls(created);
+
+    const reused = harness([ok([pr(20, branch, 'main'), pr(21, branch, 'develop')])]);
+    expect(await reused.forge.ensurePr(gitflow)).toEqual({ number: 21, url: `https://github.com/${REPO}/pull/21` });
+    expect(reused.calls.map((call) => call.args)).toEqual([listArgsFor(branch, 'develop')]);
+    expectSafeCalls(reused);
+  });
+
+  it('does not reuse an open PR from the same branch into another base', async () => {
+    const develop = { ...request, base: 'develop' };
+    const h = harness([ok([pr(30, BRANCH, 'main')]), ok(pr(31, BRANCH, 'develop'))]);
+    expect(await h.forge.ensurePr(develop)).toEqual({ number: 31, url: `https://github.com/${REPO}/pull/31` });
+    expect(h.calls.map((call) => call.args)).toEqual([listArgsFor(BRANCH, 'develop'), createArgs]);
+    expect(JSON.parse(h.calls[1]?.input ?? '')).toMatchObject({ head: BRANCH, base: 'develop' });
+  });
+
+  it('does not reuse an open PR into the same base from another head', async () => {
+    const h = harness([ok([pr(40, 'feature/agent-002-T11', 'main')]), ok(pr(41))]);
+    expect(await h.forge.ensurePr(request)).toEqual({ number: 41, url: `https://github.com/${REPO}/pull/41` });
+    expect(h.calls.map((call) => call.args)).toEqual([listArgs, createArgs]);
   });
 
   it('returns the PR that appeared between the lookup and the create (422)', async () => {
@@ -222,16 +260,65 @@ describe('ensurePr', () => {
   });
 
   it.each([
+    ['agent/002-T44', 'main'],
+    ['agent/hire-analyst', 'main'],
+    ['agent/project-web', 'main'],
+    ['agent/agent-x', 'develop'],
+    ['feature/agent-002-T44', 'develop'],
+    ['fix_1/agent-014-spec', 'release/2026.10'],
+    ['ab-c/agent-x', 'develop'],
+  ])('accepts the agent branch %s into %s', async (branch, base) => {
+    const h = harness([ok([pr(50, branch, base)])]);
+    expect(await h.forge.ensurePr({ ...request, branch, base })).toEqual({ number: 50, url: `https://github.com/${REPO}/pull/50` });
+    expect(h.calls.map((call) => call.args)).toEqual([listArgsFor(branch, base)]);
+  });
+
+  it.each([
     [{ repo: 'octo' }, 'repo'],
     [{ repo: 'octo/roster/extra' }, 'repo'],
     [{ repo: '-octo/roster' }, 'repo'],
     [{ repo: 'octo/..' }, 'repo'],
     [{ repo: 'octo/{owner}' }, 'repo'],
+    [{ branch: '' }, 'branch'],
     [{ branch: 'main' }, 'branch'],
-    [{ branch: 'feature/x' }, 'branch'],
+    [{ branch: 'master' }, 'branch'],
+    [{ branch: 'develop' }, 'branch'],
+    [{ branch: 'agent/x', base: 'agent/x' }, 'branch'],
+    [{ branch: 'agent' }, 'branch'],
+    [{ branch: 'agent/' }, 'branch'],
+    [{ branch: 'agent/a/b' }, 'branch'],
     [{ branch: 'agent/../main' }, 'branch'],
     [{ branch: 'agent/-x' }, 'branch'],
     [{ branch: 'agent/x.lock' }, 'branch'],
+    [{ branch: 'agent/x.' }, 'branch'],
+    [{ branch: `agent/${'x'.repeat(250)}` }, 'branch'],
+    [{ branch: 'feature/x' }, 'branch'],
+    [{ branch: 'feature/login' }, 'branch'],
+    [{ branch: 'feature/agent-' }, 'branch'],
+    [{ branch: 'feature/agent-a/b' }, 'branch'],
+    [{ branch: 'feature/sub/agent-x' }, 'branch'],
+    [{ branch: 'feature/agent-x.lock' }, 'branch'],
+    [{ branch: 'Feature/agent-x' }, 'branch'],
+    [{ branch: '1fix/agent-x' }, 'branch'],
+    [{ branch: `${'p'.repeat(33)}/agent-x` }, 'branch'],
+    [{ branch: 'main/agent-x' }, 'branch'],
+    [{ branch: 'master/agent-x' }, 'branch'],
+    [{ branch: 'develop/agent-x' }, 'branch'],
+    [{ branch: 'head/agent-x' }, 'branch'],
+    [{ branch: 'refs/agent-x' }, 'branch'],
+    [{ branch: 'origin/agent-x' }, 'branch'],
+    [{ base: '' }, 'base'],
+    [{ base: 'x'.repeat(101) }, 'base'],
+    [{ base: 'develop/' }, 'base'],
+    [{ base: '/develop' }, 'base'],
+    [{ base: 'release/../main' }, 'base'],
+    [{ base: 'release..1' }, 'base'],
+    [{ base: 'main.lock' }, 'base'],
+    [{ base: 'main.' }, 'base'],
+    [{ base: '-main' }, 'base'],
+    [{ base: 'refs heads' }, 'base'],
+    [{ base: 'main?x=1' }, 'base'],
+    [{ base: 'ma%2Fin' }, 'base'],
     [{ title: '' }, 'PR title'],
     [{ title: 'line\nbreak' }, 'PR title'],
     [{ title: 'x'.repeat(257) }, 'PR title'],
@@ -296,9 +383,27 @@ describe('prState', () => {
   });
 });
 
-describe('mainProtection', () => {
-  const rulesArgs = ['api', '--hostname', 'github.com', '--method', 'GET', ...HEADERS, `repos/${REPO}/rules/branches/main`];
-  const classicArgs = ['api', '--hostname', 'github.com', '--method', 'GET', ...HEADERS, `repos/${REPO}/branches/main/protection`];
+describe('branchProtection', () => {
+  const branchArgs = (branch: string): string[] => ['api', '--hostname', 'github.com', '--method', 'GET', ...HEADERS, `repos/${REPO}/branches/${branch}`];
+  const rulesArgs = (branch: string): string[] => [
+    'api',
+    '--hostname',
+    'github.com',
+    '--method',
+    'GET',
+    ...HEADERS,
+    `repos/${REPO}/rules/branches/${branch}`,
+  ];
+  const classicArgs = (branch: string): string[] => [
+    'api',
+    '--hostname',
+    'github.com',
+    '--method',
+    'GET',
+    ...HEADERS,
+    `repos/${REPO}/branches/${branch}/protection`,
+  ];
+  const exists = (name: string): GhOutput => ok({ name, protected: true, commit: { sha: 'abc' } });
   const rule = (type: string): Record<string, unknown> => ({ type, ruleset_source_type: 'Repository', ruleset_id: 1 });
   const classic = (prReviews: boolean, allowForcePushes: boolean): Record<string, unknown> => ({
     url: `https://api.github.com/repos/${REPO}/branches/main/protection`,
@@ -308,59 +413,114 @@ describe('mainProtection', () => {
   });
   const noAdmin = httpError(403, 'Resource not accessible by personal access token');
 
-  it('reads rulesets, then classic protection', async () => {
-    const h = harness([ok([]), ok(classic(true, false))]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: true, prRequired: true, forcePushBlocked: true });
-    expect(h.calls.map((call) => call.args)).toEqual([rulesArgs, classicArgs]);
+  it('reads the branch, then rulesets, then classic protection', async () => {
+    const h = harness([exists('main'), ok([]), ok(classic(true, false))]);
+    expect(await h.forge.branchProtection(REPO, 'main')).toEqual({ state: 'known', prRequired: true, forcePushBlocked: true });
+    expect(h.calls.map((call) => call.args)).toEqual([branchArgs('main'), rulesArgs('main'), classicArgs('main')]);
     expectSafeCalls(h);
   });
 
+  it('reports a protected develop branch', async () => {
+    const h = harness([exists('develop'), ok([rule('pull_request'), rule('non_fast_forward')]), ok(classic(true, false))]);
+    expect(await h.forge.branchProtection(REPO, 'develop')).toEqual({ state: 'known', prRequired: true, forcePushBlocked: true });
+    expect(h.calls.map((call) => call.args)).toEqual([branchArgs('develop'), rulesArgs('develop'), classicArgs('develop')]);
+    expectSafeCalls(h);
+  });
+
+  it('reads a base branch whose name has a slash', async () => {
+    const h = harness([exists('release/2026.10'), ok([]), httpError(404, 'Branch not protected')]);
+    expect(await h.forge.branchProtection(REPO, 'release/2026.10')).toEqual({ state: 'known', prRequired: false, forcePushBlocked: false });
+    expect(h.calls.map((call) => call.args)).toEqual([
+      branchArgs('release/2026.10'),
+      rulesArgs('release/2026.10'),
+      classicArgs('release/2026.10'),
+    ]);
+  });
+
+  it('is missing on a 404 from the branches endpoint and reads nothing else', async () => {
+    const h = harness([httpError(404, 'Branch not found')]);
+    expect(await h.forge.branchProtection(REPO, 'develop')).toEqual({ state: 'missing' });
+    expect(h.calls.map((call) => call.args)).toEqual([branchArgs('develop')]);
+    expectSafeCalls(h);
+  });
+
+  it('is missing when GitHub answers for another branch (a renamed branch redirects)', async () => {
+    const h = harness([exists('trunk')]);
+    expect(await h.forge.branchProtection(REPO, 'master')).toEqual({ state: 'missing' });
+    expect(h.calls).toHaveLength(1);
+  });
+
   it('is unknown without Administration read when rulesets do not decide both flags', async () => {
-    const h = harness([ok([rule('deletion')]), noAdmin]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: false });
+    const h = harness([exists('develop'), ok([rule('deletion')]), noAdmin]);
+    expect(await h.forge.branchProtection(REPO, 'develop')).toEqual({ state: 'unknown' });
   });
 
   it('is unknown without Administration read on a private repo (404 that is not "Branch not protected")', async () => {
-    const h = harness([ok([rule('pull_request')]), httpError(404, 'Not Found')]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: false });
+    const h = harness([exists('main'), ok([rule('pull_request')]), httpError(404, 'Not Found')]);
+    expect(await h.forge.branchProtection(REPO, 'main')).toEqual({ state: 'unknown' });
   });
 
   it('is known from rulesets alone when they require PRs and block force pushes', async () => {
-    const h = harness([ok([rule('pull_request'), rule('non_fast_forward'), rule('deletion')]), noAdmin]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: true, prRequired: true, forcePushBlocked: true });
+    const h = harness([exists('main'), ok([rule('pull_request'), rule('non_fast_forward'), rule('deletion')]), noAdmin]);
+    expect(await h.forge.branchProtection(REPO, 'main')).toEqual({ state: 'known', prRequired: true, forcePushBlocked: true });
   });
 
-  it('reports an unprotected main as known and unprotected', async () => {
-    const h = harness([ok([]), httpError(404, 'Branch not protected')]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: true, prRequired: false, forcePushBlocked: false });
+  it('reports an unprotected branch as known and unprotected', async () => {
+    const h = harness([exists('develop'), ok([]), httpError(404, 'Branch not protected')]);
+    expect(await h.forge.branchProtection(REPO, 'develop')).toEqual({ state: 'known', prRequired: false, forcePushBlocked: false });
   });
 
   it('reports classic protection that allows force pushes and needs no PR', async () => {
-    const h = harness([ok([]), ok(classic(false, true))]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: true, prRequired: false, forcePushBlocked: false });
+    const h = harness([exists('main'), ok([]), ok(classic(false, true))]);
+    expect(await h.forge.branchProtection(REPO, 'main')).toEqual({ state: 'known', prRequired: false, forcePushBlocked: false });
   });
 
   it('combines a ruleset PR rule with classic force-push blocking', async () => {
-    const h = harness([ok([rule('pull_request')]), ok(classic(false, false))]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: true, prRequired: true, forcePushBlocked: true });
+    const h = harness([exists('main'), ok([rule('pull_request')]), ok(classic(false, false))]);
+    expect(await h.forge.branchProtection(REPO, 'main')).toEqual({ state: 'known', prRequired: true, forcePushBlocked: true });
   });
 
-  it('is unknown when neither source can be read', async () => {
-    const h = harness([httpError(404, 'Not Found'), noAdmin]);
-    expect(await h.forge.mainProtection(REPO)).toEqual({ known: false });
+  it('is unknown when neither protection source can be read', async () => {
+    const h = harness([exists('main'), httpError(404, 'Not Found'), noAdmin]);
+    expect(await h.forge.branchProtection(REPO, 'main')).toEqual({ state: 'unknown' });
   });
 
   it('throws on other errors instead of guessing', async () => {
-    const rulesDown = harness([httpError(500, 'Server Error')]);
-    expect(await failure(rulesDown.forge.mainProtection(REPO))).toBeInstanceOf(ExternalCommandError);
-    const classicDown = harness([ok([]), httpError(401, 'Bad credentials')]);
-    expect((await failure(classicDown.forge.mainProtection(REPO))).message).toBe(
+    const branchDown = harness([httpError(401, 'Bad credentials')]);
+    expect((await failure(branchDown.forge.branchProtection(REPO, 'main'))).message).toBe(
+      'gh failed (exit 1): read branch: HTTP 401: Bad credentials',
+    );
+    const noName = harness([ok({ protected: true })]);
+    expect((await failure(noName.forge.branchProtection(REPO, 'main'))).message).toBe(
+      'gh failed (exit 0): read branch: unexpected response (no branch name)',
+    );
+    const rulesDown = harness([exists('main'), httpError(500, 'Server Error')]);
+    expect(await failure(rulesDown.forge.branchProtection(REPO, 'main'))).toBeInstanceOf(ExternalCommandError);
+    const classicDown = harness([exists('main'), ok([]), httpError(401, 'Bad credentials')]);
+    expect((await failure(classicDown.forge.branchProtection(REPO, 'main'))).message).toBe(
       'gh failed (exit 1): read branch protection: HTTP 401: Bad credentials',
     );
-    const malformed = harness([ok([]), ok({ url: 'x' })]);
-    expect((await failure(malformed.forge.mainProtection(REPO))).message).toBe(
+    const malformed = harness([exists('main'), ok([]), ok({ url: 'x' })]);
+    expect((await failure(malformed.forge.branchProtection(REPO, 'main'))).message).toBe(
       'gh failed (exit 0): read branch protection: unexpected response (no allow_force_pushes)',
     );
+  });
+
+  it.each(['', 'develop/', '../main', 'main/../x', 'main.lock', '-x', 'a b', 'main?x=1', 'x'.repeat(101)])(
+    'refuses the branch %j before running gh',
+    async (branch) => {
+      const h = harness([]);
+      const error = await failure(h.forge.branchProtection(REPO, branch));
+      expect(error).toBeInstanceOf(GitHubInputError);
+      expect((error as GitHubInputError).field).toBe('branch');
+      expect(h.calls).toEqual([]);
+    },
+  );
+
+  it('refuses an invalid repo before running gh', async () => {
+    const h = harness([]);
+    expect(await failure(h.forge.branchProtection('octo', 'main'))).toBeInstanceOf(GitHubInputError);
+    expect(h.calls).toEqual([]);
   });
 });
 

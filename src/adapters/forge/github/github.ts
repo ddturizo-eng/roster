@@ -1,5 +1,7 @@
 // GitHub adapter (ForgePort, plan 002 sections 4.3, 7.1, 7.8 and 8 step 10, ADR 0026, ADR 0029).
 //
+// PRs target the project's base branch and protection is read per branch (ADR 0032 sections 4 and 5).
+//
 // Every call is `gh api` against the REST API of github.com, run through `execFile` with an argument
 // array (runner.ts). Using `gh api` instead of `gh pr create` or `gh pr view` keeps gh away from git
 // entirely: it never inspects a work tree, a remote or a local branch, so no untrusted repository
@@ -13,8 +15,9 @@
 
 import { mkdirSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
+import { branchPrefixProblem } from '../../../core/domain/branches.ts';
 import { ExternalCommandError, NotFoundError, RosterError } from '../../../core/domain/errors.ts';
-import type { ForgePort, MainProtection, PrState, PullRequestRef, PullRequestRequest } from '../../../ports/forge.ts';
+import type { BranchProtection, ForgePort, PrState, PullRequestRef, PullRequestRequest } from '../../../ports/forge.ts';
 import { GitHubInputError } from './errors.ts';
 import { execFileGhRunner, ghEnv } from './runner.ts';
 import type { GhCall, GhRunner } from './runner.ts';
@@ -36,8 +39,6 @@ export interface GitHubForgeOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
-/** The only base branch Roster opens PRs against (plan 002 section 6: `defaultBranch` is `main`). */
-export const BASE_BRANCH = 'main';
 /** GitHub's limit for a PR body, in characters. */
 export const MAX_BODY_LENGTH = 65_536;
 export const MAX_TITLE_LENGTH = 256;
@@ -46,6 +47,11 @@ const API_HEADERS = ['-H', 'Accept: application/vnd.github+json', '-H', 'X-GitHu
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const REPO_NAME = /^[A-Za-z0-9._-]{1,100}$/;
 const BRANCH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const MAX_BRANCH_LENGTH = 250;
+const MAX_BASE_LENGTH = 100;
+const AGENT_MARKER = 'agent-';
+/** Never the head of a Roster PR, whatever the project's rules (ADR 0032 section 3). */
+const NEVER_HEAD: readonly string[] = ['main', 'master', 'develop'];
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/pull\/\d+$/;
@@ -74,16 +80,45 @@ function checkRepo(repo: string): void {
   }
 }
 
-/** Roster only opens PRs from branches the push guard allows: plain names under `agent/`. */
-function checkBranch(branch: string): void {
-  if (typeof branch !== 'string' || branch.length === 0 || branch.length > 250) {
-    throw new GitHubInputError('branch', 'must be 1 to 250 characters');
+function isPlainSegment(segment: string): boolean {
+  return BRANCH_SEGMENT.test(segment) && !segment.includes('..') && !segment.endsWith('.lock') && !segment.endsWith('.');
+}
+
+/**
+ * A plain branch name (the base of a PR, or a branch whose protection is read): 1 to 100 characters,
+ * `/`-separated segments of letters, digits, `.`, `_` and `-`, no `..`, no segment ending in `.` or
+ * `.lock` (ADR 0032 section 1).
+ */
+function checkPlainBranch(name: string, field: string): void {
+  if (typeof name !== 'string' || name.length === 0 || name.length > MAX_BASE_LENGTH) {
+    throw new GitHubInputError(field, `must be 1 to ${MAX_BASE_LENGTH} characters`);
   }
-  if (!branch.startsWith('agent/')) throw new GitHubInputError('branch', 'must start with agent/');
-  for (const segment of branch.split('/')) {
-    if (!BRANCH_SEGMENT.test(segment) || segment.includes('..') || segment.endsWith('.lock') || segment.endsWith('.')) {
-      throw new GitHubInputError('branch', 'is not a plain branch name');
-    }
+  if (!name.split('/').every(isPlainSegment)) throw new GitHubInputError(field, 'is not a plain branch name');
+}
+
+/**
+ * Roster only opens PRs from agent branches (ADR 0032 section 2): `agent/<one segment>`, or
+ * `<prefix>/agent-<rest>` with a valid prefix and exactly one segment after it. The adapter does not
+ * know the project's prefix, so it accepts both forms; the push guard, bound to the project's rules,
+ * decides which agent branches reach GitHub. A head equal to the base, `main`, `master` or `develop`
+ * is refused explicitly, although the shape already excludes it.
+ */
+function checkBranch(branch: string, base: string): void {
+  if (typeof branch !== 'string' || branch.length === 0 || branch.length > MAX_BRANCH_LENGTH) {
+    throw new GitHubInputError('branch', `must be 1 to ${MAX_BRANCH_LENGTH} characters`);
+  }
+  if (branch === base || NEVER_HEAD.includes(branch)) {
+    throw new GitHubInputError('branch', 'must not be the base branch, main, master or develop');
+  }
+  const segments = branch.split('/');
+  const [prefix = '', rest = ''] = segments;
+  if (segments.length !== 2 || !isPlainSegment(rest)) {
+    throw new GitHubInputError('branch', 'must be agent/<name> or <prefix>/agent-<name>, one segment after the prefix');
+  }
+  if (prefix === 'agent') return;
+  if (branchPrefixProblem(prefix) !== undefined) throw new GitHubInputError('branch', 'has an invalid branch prefix');
+  if (!rest.startsWith(AGENT_MARKER) || rest.length === AGENT_MARKER.length) {
+    throw new GitHubInputError('branch', 'must be agent/<name> or <prefix>/agent-<name>, one segment after the prefix');
   }
 }
 
@@ -187,19 +222,20 @@ export class GitHubForge implements ForgePort {
 
   async ensurePr(request: PullRequestRequest): Promise<PullRequestRef> {
     checkRepo(request.repo);
-    checkBranch(request.branch);
+    checkPlainBranch(request.base, 'base');
+    checkBranch(request.branch, request.base);
     checkTitle(request.title);
     checkBody(request.body);
-    const existing = await this.#findOpenPr(request.repo, request.branch);
+    const existing = await this.#findOpenPr(request.repo, request.branch, request.base);
     if (existing !== null) return existing;
 
     const label = 'create PR';
-    const payload = JSON.stringify({ title: request.title, head: request.branch, base: BASE_BRANCH, body: request.body });
+    const payload = JSON.stringify({ title: request.title, head: request.branch, base: request.base, body: request.body });
     const created = await this.#api(label, apiArgs('POST', `repos/${request.repo}/pulls`, {}, true), payload);
     if (created.ok) return parsePrRef(label, created.json);
     // 422: a PR for this head and base appeared since the lookup (or GitHub refused the request).
     if (created.status === 422) {
-      const raced = await this.#findOpenPr(request.repo, request.branch);
+      const raced = await this.#findOpenPr(request.repo, request.branch, request.base);
       if (raced !== null) return raced;
     }
     throw this.#failure(label, created);
@@ -225,23 +261,26 @@ export class GitHubForge implements ForgePort {
   }
 
   /**
-   * Combines the branch rules of rulesets (readable with Metadata read) and classic branch protection
-   * (readable only with Administration read). A flag is reported only when it is decided: true when
-   * either source enforces it, false when both sources are readable and neither does. Anything else
-   * is `unknown`, which is what a token without Administration read gets unless rulesets alone
-   * already require PRs and block force pushes.
+   * Protection of `branch` (ADR 0032 section 5). First reads the branch itself: a 404 means it does
+   * not exist (`missing`). Then combines the branch rules of rulesets (readable with Metadata read)
+   * and classic branch protection (readable only with Administration read). A flag is reported only
+   * when it is decided: true when either source enforces it, false when both sources are readable and
+   * neither does. Anything else is `unknown`, which is what a token without Administration read gets
+   * unless rulesets alone already require PRs and block force pushes.
    */
-  async mainProtection(repo: string): Promise<MainProtection> {
+  async branchProtection(repo: string, branch: string): Promise<BranchProtection> {
     checkRepo(repo);
-    const rules = await this.#rulesetRules(repo);
-    const classic = await this.#classicProtection(repo);
+    checkPlainBranch(branch, 'branch');
+    if (!(await this.#branchExists(repo, branch))) return { state: 'missing' };
+    const rules = await this.#rulesetRules(repo, branch);
+    const classic = await this.#classicProtection(repo, branch);
     const prRequired = decide(rules === null ? null : rules.has('pull_request'), classic === null ? null : classic.prRequired);
     const forcePushBlocked = decide(
       rules === null ? null : rules.has('non_fast_forward'),
       classic === null ? null : classic.forcePushBlocked,
     );
-    if (prRequired === null || forcePushBlocked === null) return { known: false };
-    return { known: true, prRequired, forcePushBlocked };
+    if (prRequired === null || forcePushBlocked === null) return { state: 'unknown' };
+    return { state: 'known', prRequired, forcePushBlocked };
   }
 
   async canRead(repo: string): Promise<boolean> {
@@ -258,23 +297,41 @@ export class GitHubForge implements ForgePort {
     throw this.#failure(label, result);
   }
 
-  async #findOpenPr(repo: string, branch: string): Promise<PullRequestRef | null> {
+  /** The open PR from `branch` into `base`; head and base must both match, whatever GitHub filtered. */
+  async #findOpenPr(repo: string, branch: string, base: string): Promise<PullRequestRef | null> {
     const label = 'list PRs';
     const owner = repo.split('/')[0] as string;
-    const fields = { state: 'open', head: `${owner}:${branch}`, base: BASE_BRANCH };
+    const fields = { state: 'open', head: `${owner}:${branch}`, base };
     const result = await this.#api(label, apiArgs('GET', `repos/${repo}/pulls`, fields));
     if (!result.ok) throw this.#failure(label, result);
     if (!Array.isArray(result.json)) throw new UnexpectedResponseError(label, 'not a list');
     const match = result.json.find(
-      (pr: unknown) => isRecord(pr) && pr['state'] === 'open' && refOf(pr['head']) === branch && refOf(pr['base']) === BASE_BRANCH,
+      (pr: unknown) => isRecord(pr) && pr['state'] === 'open' && refOf(pr['head']) === branch && refOf(pr['base']) === base,
     );
     return match === undefined ? null : parsePrRef(label, match);
   }
 
-  /** Types of the active ruleset rules of `main`, or null when they cannot be read. */
-  async #rulesetRules(repo: string): Promise<Set<string> | null> {
+  /**
+   * True when `branch` exists; false on 404 from the branches endpoint. A name GitHub answers for a
+   * different branch (a renamed branch redirects to its new name) does not exist under that name.
+   */
+  async #branchExists(repo: string, branch: string): Promise<boolean> {
+    const label = 'read branch';
+    const result = await this.#api(label, apiArgs('GET', `repos/${repo}/branches/${branch}`));
+    if (!result.ok) {
+      if (result.status === 404) return false;
+      throw this.#failure(label, result);
+    }
+    if (!isRecord(result.json) || typeof result.json['name'] !== 'string') {
+      throw new UnexpectedResponseError(label, 'no branch name');
+    }
+    return result.json['name'] === branch;
+  }
+
+  /** Types of the active ruleset rules of `branch`, or null when they cannot be read. */
+  async #rulesetRules(repo: string, branch: string): Promise<Set<string> | null> {
     const label = 'read branch rules';
-    const result = await this.#api(label, apiArgs('GET', `repos/${repo}/rules/branches/${BASE_BRANCH}`));
+    const result = await this.#api(label, apiArgs('GET', `repos/${repo}/rules/branches/${branch}`));
     if (!result.ok) {
       if (result.status === 403 || result.status === 404) return null;
       throw this.#failure(label, result);
@@ -287,10 +344,10 @@ export class GitHubForge implements ForgePort {
     return types;
   }
 
-  /** Classic protection of `main`; both flags false when it is not protected; null when unreadable. */
-  async #classicProtection(repo: string): Promise<{ prRequired: boolean; forcePushBlocked: boolean } | null> {
+  /** Classic protection of `branch`; both flags false when it is not protected; null when unreadable. */
+  async #classicProtection(repo: string, branch: string): Promise<{ prRequired: boolean; forcePushBlocked: boolean } | null> {
     const label = 'read branch protection';
-    const result = await this.#api(label, apiArgs('GET', `repos/${repo}/branches/${BASE_BRANCH}/protection`));
+    const result = await this.#api(label, apiArgs('GET', `repos/${repo}/branches/${branch}/protection`));
     if (!result.ok) {
       if (result.status === 404 && result.message === 'Branch not protected') return { prRequired: false, forcePushBlocked: false };
       // Without Administration read GitHub answers 403 (or 404 on private repos).

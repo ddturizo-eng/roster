@@ -309,7 +309,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T44. GitHub adapter: PRs against the base branch and branch protection
 
-- [ ] Done
+- [x] Done
 - Depends on: T11, T42
 - Profile: TS adapters
 - Areas: `src/adapters/forge/github/`, `src/ports/forge.ts`, `test/fakes/`, tests
