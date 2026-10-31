@@ -277,7 +277,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T42. Registration: base branch, branch prefix and agent branch names
 
-- [ ] Done
+- [x] Done
 - Depends on: T09
 - Profile: TS core
 - Areas: `src/core/domain/project.ts`, `src/core/domain/branches.ts`, `src/core/orchestrator/projects.ts`, tests

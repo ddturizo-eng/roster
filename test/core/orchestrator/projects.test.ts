@@ -21,7 +21,8 @@ function registration(name: string, overrides: Record<string, unknown> = {}): Re
     name,
     repoPath: `C:\\code\\${name}`,
     remote: `https://github.com/acme/${name}`,
-    defaultBranch: 'main',
+    baseBranch: 'main',
+    branchPrefix: 'agent',
     setup: ['npm ci --ignore-scripts'],
     verify: ['npm run typecheck', 'npm test'],
     dependencyManifests: ['requirements.txt'],
@@ -56,8 +57,24 @@ describe('parseRegistration', () => {
     ['remote ssh', { remote: 'git@github.com:acme/web.git' }, 'remote'],
     ['remote with trailing path', { remote: 'https://github.com/acme/web/tree/main' }, 'remote'],
     ['remote missing', { remote: undefined }, 'remote'],
-    ['defaultBranch not main', { defaultBranch: 'master' }, 'defaultBranch'],
-    ['defaultBranch missing', { defaultBranch: undefined }, 'defaultBranch'],
+    ['stale defaultBranch', { defaultBranch: 'main' }, 'defaultBranch'],
+    ['prefix reserved', { branchPrefix: 'develop' }, 'branchPrefix'],
+    ['prefix reserved main', { branchPrefix: 'main' }, 'branchPrefix'],
+    ['prefix uppercase', { branchPrefix: 'Feature' }, 'branchPrefix'],
+    ['prefix two segments', { branchPrefix: 'feat/ure' }, 'branchPrefix'],
+    ['prefix too long', { branchPrefix: 'a'.repeat(33) }, 'branchPrefix'],
+    ['prefix not a string', { branchPrefix: 3 }, 'branchPrefix'],
+    ['base under agent/', { baseBranch: 'agent/x' }, 'baseBranch'],
+    ['base with agent- segment', { baseBranch: 'release/agent-x' }, 'baseBranch'],
+    ['base equals prefix', { baseBranch: 'feature', branchPrefix: 'feature' }, 'baseBranch'],
+    ['base equals default prefix', { baseBranch: 'agent' }, 'baseBranch'],
+    ['base over 100 chars', { baseBranch: 'a'.repeat(101) }, 'baseBranch'],
+    ['base with ..', { baseBranch: 'a..b' }, 'baseBranch'],
+    ['base segment ends .lock', { baseBranch: 'a.lock/b' }, 'baseBranch'],
+    ['base segment ends dot', { baseBranch: 'a./b' }, 'baseBranch'],
+    ['base with space', { baseBranch: 'a b' }, 'baseBranch'],
+    ['base empty segment', { baseBranch: 'a//b' }, 'baseBranch'],
+    ['base not a string', { baseBranch: 1 }, 'baseBranch'],
     ['setup missing', { setup: undefined }, 'setup'],
     ['setup not an array', { setup: 'npm ci' }, 'setup'],
     ['setup item empty', { setup: ['npm ci', ''] }, 'setup[1]'],
@@ -78,6 +95,44 @@ describe('parseRegistration', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.issues.map((i) => [i.file, i.field])).toContainEqual(['projects/web.json', field]);
+  });
+
+  it('defaults baseBranch and branchPrefix when both are absent', () => {
+    const body = registration('web', { baseBranch: undefined, branchPrefix: undefined });
+    const result = parseRegistration(JSON.stringify(body), 'web', 'projects/web.json');
+    expect(result).toEqual({ ok: true, registration: registration('web') });
+  });
+
+  it('accepts a gitflow base and prefix', () => {
+    const body = registration('web', { baseBranch: 'develop', branchPrefix: 'feature' });
+    const result = parseRegistration(JSON.stringify(body), 'web', 'projects/web.json');
+    expect(result.ok && [result.registration.baseBranch, result.registration.branchPrefix]).toEqual([
+      'develop',
+      'feature',
+    ]);
+  });
+
+  it('names baseBranch in the stale defaultBranch message', () => {
+    const result = parseRegistration(
+      JSON.stringify(registration('web', { defaultBranch: 'develop' })),
+      'web',
+      'projects/web.json',
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const issue = result.issues.find((i) => i.field === 'defaultBranch');
+    expect(issue?.message).toContain('baseBranch');
+    expect(JSON.stringify(result)).not.toContain('develop');
+  });
+
+  it('never echoes branch values', () => {
+    const result = parseRegistration(
+      JSON.stringify(registration('web', { baseBranch: 'agent/SECRETBASE', branchPrefix: 'SECRETPREFIX' })),
+      'web',
+      'projects/web.json',
+    );
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('SECRET');
   });
 
   it('rejects invalid JSON with the whole file as the field', () => {
@@ -167,6 +222,33 @@ describe('readProjects', () => {
       ['roster', true],
       ['web', false],
     ]);
+  });
+
+  it.each([
+    ['base develop', { baseBranch: 'develop' }, [['baseBranch']]],
+    ['prefix feature', { branchPrefix: 'feature' }, [['branchPrefix']]],
+    ['both', { baseBranch: 'develop', branchPrefix: 'feature' }, [['baseBranch'], ['branchPrefix']]],
+  ] as const)('rejects and skips the Roster repo registered with %s', async (_l, overrides, fields) => {
+    const { store, deps } = setup({
+      'projects/roster.json': JSON.stringify(registration('roster', { repoPath: ROSTER, ...overrides })),
+    });
+    const result = await readProjects(deps);
+    expect(result.projects).toEqual([]);
+    expect(result.issues.map((i) => [i.file, i.field])).toEqual(
+      fields.map(([f]) => ['projects/roster.json', f]),
+    );
+    expect(store.listProjects()).toEqual([]);
+  });
+
+  it('accepts the Roster repo with explicit or defaulted main and agent', async () => {
+    const { deps } = setup({
+      'projects/roster.json': JSON.stringify(
+        registration('roster', { repoPath: ROSTER, baseBranch: undefined, branchPrefix: undefined }),
+      ),
+    });
+    const result = await readProjects(deps);
+    expect(result.issues).toEqual([]);
+    expect(result.projects.map((p) => p.isRosterRepo)).toEqual([true]);
   });
 
   it('returns nothing for an empty registry', async () => {

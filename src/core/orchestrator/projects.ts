@@ -6,6 +6,13 @@
 
 import type { Project, ProjectRegistration } from '../domain/project.ts';
 import { SLUG_PATTERN } from '../domain/ids.ts';
+import {
+  DEFAULT_BASE_BRANCH,
+  DEFAULT_BRANCH_PREFIX,
+  ROSTER_REPO_BRANCH_RULES,
+  baseBranchProblem,
+  branchPrefixProblem,
+} from '../domain/branches.ts';
 import { IssueCollector, indexPath } from '../domain/validation.ts';
 import type { ValidationIssue } from '../domain/validation.ts';
 import { isValidGlob } from '../policy/glob.ts';
@@ -64,7 +71,24 @@ export function parseRegistration(text: string, slug: string, file: string): Reg
     pattern: /^[^\u0000-\u001f]+$/,
   });
   const remote = c.requiredString(root, 'remote', '$', { ...text500, pattern: REMOTE_PATTERN });
-  const defaultBranch = c.requiredEnum(root, 'defaultBranch', '$', ['main'] as const);
+  if (Object.hasOwn(root, 'defaultBranch')) {
+    c.add('$.defaultBranch', 'enum', 'is no longer supported; use baseBranch');
+  }
+  const prefixRule = { maxLength: 100, nonEmpty: true };
+  const branchPrefixRaw = c.optionalString(root, 'branchPrefix', '$', prefixRule);
+  let branchPrefix = DEFAULT_BRANCH_PREFIX;
+  if (branchPrefixRaw !== undefined) {
+    const problem = branchPrefixProblem(branchPrefixRaw);
+    if (problem === undefined) branchPrefix = branchPrefixRaw;
+    else c.add('$.branchPrefix', 'pattern', problem);
+  }
+  const baseRaw = c.optionalString(root, 'baseBranch', '$', { maxLength: 1000, nonEmpty: true });
+  let baseBranch = DEFAULT_BASE_BRANCH;
+  if (baseRaw !== undefined) {
+    const problem = baseBranchProblem(baseRaw, branchPrefixRaw ?? DEFAULT_BRANCH_PREFIX);
+    if (problem === undefined) baseBranch = baseRaw;
+    else c.add('$.baseBranch', 'pattern', problem);
+  }
   const image = c.requiredString(root, 'image', '$', { ...text500, pattern: /^[^\s\u0000-\u001f]+$/ });
 
   const commands = (key: 'setup' | 'verify'): string[] => {
@@ -101,7 +125,8 @@ export function parseRegistration(text: string, slug: string, file: string): Reg
       name: name as string,
       repoPath: repoPath as string,
       remote: remote as string,
-      defaultBranch: defaultBranch as 'main',
+      baseBranch,
+      branchPrefix,
       setup,
       verify,
       dependencyManifests,
@@ -167,6 +192,21 @@ export async function readProjects(deps: RegistryDeps): Promise<RegistryReadResu
       continue;
     }
     const registration = parsed.registration;
+    const isRosterRepo = samePath(registration.repoPath, rosterRepoPath);
+    if (isRosterRepo) {
+      if (registration.baseBranch !== ROSTER_REPO_BRANCH_RULES.baseBranch) {
+        issues.push({ file, field: 'baseBranch', message: 'the Roster repo must use baseBranch main' });
+      }
+      if (registration.branchPrefix !== ROSTER_REPO_BRANCH_RULES.branchPrefix) {
+        issues.push({ file, field: 'branchPrefix', message: 'the Roster repo must use branchPrefix agent' });
+      }
+      if (
+        registration.baseBranch !== ROSTER_REPO_BRANCH_RULES.baseBranch ||
+        registration.branchPrefix !== ROSTER_REPO_BRANCH_RULES.branchPrefix
+      ) {
+        continue;
+      }
+    }
     const match = REMOTE_PATTERN.exec(registration.remote) as RegExpExecArray;
     projects.push({
       project: {
@@ -178,7 +218,7 @@ export async function readProjects(deps: RegistryDeps): Promise<RegistryReadResu
         syncedAt,
       },
       registration,
-      isRosterRepo: samePath(registration.repoPath, rosterRepoPath),
+      isRosterRepo,
     });
   }
   store.transaction(() => {
