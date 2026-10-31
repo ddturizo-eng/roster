@@ -20,6 +20,7 @@ export const EN: Catalog = {
     (tail === '' ? '' : `\nLast lines:\n${tail}`),
   'stop.timeout': ({ job, minutes }) => `The ${job} job reached its time limit of ${minutes} minutes.`,
   'stop.error': ({ job, reason }) => `The ${job} job failed: ${reason}.`,
+  'stop.noAgent': () => 'The task has no approved agent to run it.',
   'stop.interrupted': () =>
     'The execution was interrupted: the roster run process ended before it finished.',
   'stop.stopped': () => 'Stopped by the human with roster stop. Nothing was pushed; the workspace is kept.',

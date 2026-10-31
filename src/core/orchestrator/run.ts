@@ -287,7 +287,7 @@ export async function runNext(deps: RunDeps, input: RunInput): Promise<RunOutcom
   const rosterCommit = await vcs.resolveRef(deps.rosterRepoPath, ROSTER_REF);
   const agent = await loadAgent(deps, rosterCommit, task.agentSlug);
   if (agent === undefined) {
-    const reason = say('stop.error', { job: 'specialist', reason: 'no approved agent for this task' });
+    const reason = say('stop.noAgent', {});
     store.updateTask(task.id, { status: 'blocked', stopReason: reason, updatedAt: nowIso() });
     out.print(say('run.stopReason', { reason }));
     return { kind: 'no_agent', taskId: task.id };
