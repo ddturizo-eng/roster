@@ -1,12 +1,12 @@
-// Fake ForgePort: PRs get numbers 1, 2, 3...; an open PR of the same repo and branch is reused.
+// Fake ForgePort: PRs get numbers 1, 2, 3...; an open PR of the same repo, branch and base is reused.
 
-import type { ForgePort, MainProtection, PrState, PullRequestRef, PullRequestRequest } from '../../src/ports/forge.ts';
+import type { BranchProtection, ForgePort, PrState, PullRequestRef, PullRequestRequest } from '../../src/ports/forge.ts';
 import { CallLog, Responses } from './recorder.ts';
 
 export class FakeForge implements ForgePort {
   readonly log: CallLog;
   readonly responses = new Responses<ForgePort>();
-  /** PRs created by `ensurePr`, keyed by `<repo>#<branch>`. */
+  /** PRs created by `ensurePr`, keyed by `<repo>#<branch>-><base>`. */
   readonly prs = new Map<string, PullRequestRef>();
   #nextNumber = 1;
 
@@ -17,7 +17,7 @@ export class FakeForge implements ForgePort {
   async ensurePr(request: PullRequestRequest): Promise<PullRequestRef> {
     this.log.record('forge', 'ensurePr', [request]);
     return this.responses.answer('ensurePr', [request], () => {
-      const key = `${request.repo}#${request.branch}`;
+      const key = `${request.repo}#${request.branch}->${request.base}`;
       const existing = this.prs.get(key);
       if (existing !== undefined) return existing;
       const number = this.#nextNumber++;
@@ -32,10 +32,10 @@ export class FakeForge implements ForgePort {
     return this.responses.answer('prState', [repo, number], (): PrState => ({ state: 'open' }));
   }
 
-  async mainProtection(repo: string): Promise<MainProtection> {
-    this.log.record('forge', 'mainProtection', [repo]);
-    return this.responses.answer('mainProtection', [repo], (): MainProtection => ({
-      known: true,
+  async branchProtection(repo: string, branch: string): Promise<BranchProtection> {
+    this.log.record('forge', 'branchProtection', [repo, branch]);
+    return this.responses.answer('branchProtection', [repo, branch], (): BranchProtection => ({
+      state: 'known',
       prRequired: true,
       forcePushBlocked: true,
     }));
