@@ -1,0 +1,16 @@
+{
+  "defaults": [".claude/**", ".mcp.json", ".github/workflows/**", ".devcontainer/**", "specs/constitution.md"],
+  "roster": [
+    "policies/**",
+    "container/**",
+    "projects/**",
+    "agents/**",
+    "skills/**",
+    "scripts/install.ps1",
+    "scripts/sync-agents.ps1",
+    "src/core/policy/**",
+    "src/adapters/vcs/push-guard.ts",
+    "src/adapters/sandbox/docker/isolation.ts",
+    "src/adapters/runtime/claude-code/managed-settings.ts"
+  ]
+}

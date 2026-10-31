@@ -155,7 +155,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T08. Policy module and policy files
 
-- [ ] Done
+- [x] Done
 - Depends on: T02
 - Profile: TS core
 - Agent: roster-core-ts-engineer

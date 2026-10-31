@@ -1,0 +1,32 @@
+{
+  "operations": {
+    "read": "allow",
+    "write_worktree": "allow",
+    "run_commands": "allow",
+    "install_dependencies": "approve",
+    "vcs_write": "roster_only",
+    "delete_outside_worktree": "deny",
+    "migrate": "deny",
+    "deploy": "deny",
+    "change_safety": "deny"
+  },
+  "limits": {
+    "maxTurns": 60,
+    "memory": "4g",
+    "cpus": 2,
+    "pids": 512,
+    "maxRunsPerNight": 5
+  },
+  "timeoutMinutes": {
+    "specialist": 90,
+    "hr-director": 20,
+    "analyst": 20,
+    "architect": 60,
+    "reviewer": 20,
+    "setup": 15,
+    "verify": 20
+  },
+  "providerHosts": ["api.anthropic.com"],
+  "registryHosts": ["registry.npmjs.org"],
+  "dependencyManifests": ["package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock"]
+}
