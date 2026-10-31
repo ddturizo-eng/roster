@@ -322,7 +322,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T18. Sync of task PR states
 
-- [ ] Done
+- [x] Done
 - Depends on: T07, T11
 - Profile: TS core
 - Agent: roster-core-ts-engineer
