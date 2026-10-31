@@ -3,6 +3,8 @@
 - Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
 - Deciders: architect, human
+- Amended by: 0032 (project-side intent is read from `origin/<baseBranch>` of the project; the Roster
+  repo side stays on `origin/main`)
 
 ## Context
 

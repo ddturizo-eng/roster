@@ -3,6 +3,7 @@
 - Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
 - Deciders: architect, human
+- Amended by: 0032 (import step 1 reads `origin/<baseBranch>` of the project)
 
 ## Context
 

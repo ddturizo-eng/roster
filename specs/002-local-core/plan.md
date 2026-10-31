@@ -1,14 +1,16 @@
 # Plan 002 — Local core MVP
 
 - Spec: `specs/002-local-core/spec.md` (approved 2026-10-30, PR #2; amended 2026-10-30 with
-  `roster watch`, user story 8)
+  `roster watch`, user story 8; amended 2026-10-30 with the base branch and branch prefix per
+  project, user story 9)
 - Date: 2026-10-30
 - Author: architect
-- ADRs: 0015-0031 (0030 amends 0028; 0031 extends 0022).
+- ADRs: 0015-0032 (0030 amends 0028; 0031 extends 0022; 0032 amends 0018, 0019, 0020, 0024, 0025,
+  0028 and 0029).
   Superseded by them: 0006, 0007, 0009, 0012, 0013.
   Kept: 0002, 0003, 0004, 0005, 0008 (amended by 0017), 0010 (extended by 0022), 0014.
 - Status: Approved (2026-10-30, PR #3). ADRs 0015-0030 Accepted. ADR 0031 (live activity view) Accepted
-  2026-10-30.
+  2026-10-30. ADR 0032 (base branch and branch prefix per project) Proposed 2026-10-30.
 
 ## 1. Summary
 
@@ -26,8 +28,9 @@ official `claude` binary inside a fresh Docker container. Only the job's working
 container reaches only the provider API through an egress proxy. It holds no GitHub credentials and no
 `.git` directory. Roster itself, outside the container, validates the agent's result, checks the
 diff against the policy and protected paths, runs the project's verification commands in a second
-container without network, runs the code reviewer, commits, pushes `agent/<feature>-<task>` and opens
-the PR. Human approval at every gate is the merge of a PR, which Roster detects.
+container without network, runs the code reviewer, commits, pushes the task's agent branch
+(`agent/<feature>-<task>` by default, section 6.1) and opens the PR against the project's base branch
+(`main` by default). Human approval at every gate is the merge of a PR, which Roster detects.
 
 The plan is ordered as a walking skeleton (see `tasks.md`): first a minimal `roster run` that executes
 one imported task in a container and opens a PR, so Roster can execute the rest of its own tasks; then
@@ -44,7 +47,7 @@ Spec 001 is superseded, but its core design still fits. Reused, with the changes
 | Selection rules (`select.ts`) | `core/dag` readiness + selection | Source is the store, not Linear. Ready = not `needs-human` and every dependency has a merged PR. Order = `tasks.md` order, oldest feature first. |
 | Neutral agent reader (`agents.ts`) | `core/agents` | AgentDefinition v2 with capabilities instead of tool names; v1 files still parse (ADR 0021). |
 | Harness interface + registry + Claude Code adapter (ADR 0010) | `ports/runtime` + `adapters/runtime/claude-code` | Adapter builds a container invocation; Docker runs it; router picks the runtime by capabilities (ADR 0022). |
-| Git ops with push guard (`git.ts`) | `adapters/vcs/git` + `push-guard.ts` | Takes a target repo; uses a separate git dir so no `.git` reaches the container; guard unchanged (only `refs/heads/agent/*`, no force). |
+| Git ops with push guard (`git.ts`) | `adapters/vcs/git` + `push-guard.ts` | Takes a target repo; uses a separate git dir so no `.git` reaches the container; the guard is bound per workspace to the project's base branch and prefix and pushes only agent-marker branches, never `main`, `master`, `develop` or the base branch, never forced (ADR 0032). |
 | Hiring step (`hire.ts`, ADR 0012) | `core/orchestrator/hire` | State lives in the store; hire PR goes to the Roster repo (ADR 0027). |
 | Orchestrator state machine with injected ports, ordered side-effect tests (`run.ts`) | `core/orchestrator/run` | More steps (policy check, verification, review); outcomes go to the store, not Linear (ADR 0026). |
 | Quota handling: WIP commit, push branch, back to Todo (ADR 0013) | Same behavior | Back to `todo` in the store, plus a runtime cooldown (ADR 0028) that lasts until the reset time Claude Code reports, with a fixed fallback (ADR 0030). |
@@ -58,7 +61,7 @@ current-issue file.
 
 ## 3. Decisions and hypotheses
 
-Decisions are recorded in ADRs 0015-0031. The following are **hypotheses** the plan depends on.
+Decisions are recorded in ADRs 0015-0032. The following are **hypotheses** the plan depends on.
 The spike task T14 (`needs-human`) runs first, before any other task, with throwaway files, and
 validates H2-H7 before the images and adapters that depend on them are built. T06 validates H1. T24, T29 and T40 (real runs) validate H8-H10. T41 and T40 validate H11.
 
@@ -102,7 +105,7 @@ src/
 
 | Module | Responsibility |
 | --- | --- |
-| `core/domain` | Types and ids: Project, Feature, Stage, Task, TaskStatus, Execution, JobKind, AgentDefinition, Capability, result contracts and their validators, ApprovalRequest, ActivityEvent (ADR 0031), typed errors. |
+| `core/domain` | Types and ids: Project, Feature, Stage, Task, TaskStatus, Execution, JobKind, AgentDefinition, Capability, result contracts and their validators, ApprovalRequest, ActivityEvent (ADR 0031), typed errors. Agent branch names built from a project's branch rules (section 6.1, ADR 0032). |
 | `core/dag` | Parse `tasks.md` (ADR 0019), validate ids and references, detect cycles (names the cycle), compute readiness, select the next task, compute re-import changes. Pure. |
 | `core/lifecycle` | Feature state machine (ADR 0020). Pure transition function that refuses skipped stages. |
 | `core/agents` | Parse and validate AgentDefinition v2 frontmatter (flat subset) and v1 compatibility (ADR 0021). Pure. |
@@ -118,8 +121,8 @@ src/
 | --- | --- | --- |
 | `runtime/claude-code` | RuntimePort | Builds the container invocation for `claude -p`, generates the managed settings file from capabilities and policy (`managed-settings.ts`, protected), parses stream-json, maps outcomes, detects quota, returns the last `rate_limit_event` snapshot and, on quota exhaustion, the reset time (ADR 0030). Translates one `stream-json` line at a time into activity events for `roster watch` (`activity.ts`, the optional `activity` member of RuntimePort, ADR 0031). Never `--bare`. |
 | `sandbox/docker` | SandboxPort | Docker CLI through `execFile`. Creates the per-execution internal network, starts the egress proxy, runs job containers, writes each job's stdout and stderr to its log files line by line with per-line secret redaction (ADR 0031), enforces timeouts, kills by name. Isolation flags live in `isolation.ts` (protected) and cover every job profile from the start. |
-| `vcs/git` | VcsPort | Workspaces with a separate git dir, safe git config on every call, branch prepare/resume, commit, changed paths over a range, `git show` of `origin/main` blobs, push through `push-guard.ts` (protected). |
-| `forge/github` | ForgePort | `gh` CLI with `GH_TOKEN` passed only to its child process: create or reuse PR, PR state and `mergedAt`, read `main` protection for `doctor`. |
+| `vcs/git` | VcsPort | Workspaces with a separate git dir, safe git config on every call, branch prepare/resume from the project's base branch, commit, changed paths over a range, `git show` of blobs at a ref (`origin/main` of the Roster repo, `origin/<baseBranch>` of a project), push through `push-guard.ts` (protected), which is created once per workspace with the project's branch rules (ADR 0032). |
+| `forge/github` | ForgePort | `gh` CLI with `GH_TOKEN` passed only to its child process: create or reuse PR against the project's base branch, PR state and `mergedAt`, read the protection of the base branch and `main` for `doctor` and `roster project add` (ADR 0032). |
 | `store/sqlite` | StorePort | `node:sqlite`, schema migrations, one database file (ADR 0018). |
 | `secrets/dpapi` | SecretsPort | Secrets encrypted with Windows DPAPI (current user) in files under `%LOCALAPPDATA%\Roster\secrets\`, through `powershell.exe -NoProfile` (ADR 0016, 0029). |
 | `scheduler/windows` | used by `roster schedule` | Registers and removes the Task Scheduler task through PowerShell `ScheduledTasks` cmdlets (ADR 0015). |
@@ -167,11 +170,11 @@ Execution ids are time-ordered: `<yyyymmddhhmmss>-<6 hex>`.
 | Table | Columns (main) | Notes |
 | --- | --- | --- |
 | `schema_migrations` | `version`, `applied_at` | |
-| `projects` | `name` PK, `repo_path`, `remote_url`, `owner_repo`, `registration_commit`, `synced_at` | Cache of `projects/<name>.json` read from `origin/main` of the Roster repo. |
+| `projects` | `name` PK, `repo_path`, `remote_url`, `owner_repo`, `registration_commit`, `synced_at` | Cache of `projects/<name>.json` read from `origin/main` of the Roster repo. `baseBranch`, `branchPrefix`, `setup` and `verify` are not cached: a run uses the registration loaded by its own sync step (ADR 0032). |
 | `features` | `id` PK (`<project>:<NNN>`), `project`, `number` (`NNN`), `slug`, `stage`, `step`, `idea_text`, `created_at`, `updated_at` | `stage` and `step` as in ADR 0020. |
 | `feature_events` | `id`, `feature_id`, `from_stage`, `to_stage`, `step`, `at`, `pr_url`, `merged_at`, `evidence_commit`, `reason` | Every transition; gates record the PR and its merge date. |
 | `grilling` | `id`, `feature_id`, `round`, `question_human`, `question_en`, `answer_human`, `asked_at`, `answered_at` | Answers recorded as typed. |
-| `tasks` | `id` PK (`<project>:<NNN>-<Tnn>`), `feature_id`, `key` (`Tnn`), `ord`, `title`, `status`, `needs_human`, `agent_slug`, `profile`, `body_md`, `source_commit`, `branch`, `pr_number`, `pr_url`, `merged_at`, `stop_reason`, `retry_note`, `updated_at` | `status` as in ADR 0020. `body_md` is the task text given to the agent. |
+| `tasks` | `id` PK (`<project>:<NNN>-<Tnn>`), `feature_id`, `key` (`Tnn`), `ord`, `title`, `status`, `needs_human`, `agent_slug`, `profile`, `body_md`, `source_commit`, `branch`, `pr_number`, `pr_url`, `merged_at`, `stop_reason`, `retry_note`, `updated_at` | `status` as in ADR 0020. `body_md` is the task text given to the agent. `branch` is the full agent branch name. |
 | `task_dependencies` | `task_id`, `depends_on_id` | Edges of the DAG. |
 | `executions` | `id` PK, `task_id` (nullable), `feature_id`, `job_kind`, `agent_slug`, `runtime`, `status`, `started_at`, `ended_at`, `base_commit`, `head_commit`, `branch`, `pr_url`, `log_dir`, `container_name`, `result_json`, `reason`, `stop_requested_at`, `pid`, `rate_limit_status`, `rate_limit_type`, `five_hour_utilization`, `five_hour_resets_at`, `seven_day_utilization`, `seven_day_resets_at`, `rate_limit_observed_at` | Spec fields: task, agent, runtime, start, end, status, log location, PR link. The `rate_limit_*`, `five_hour_*` and `seven_day_*` columns hold the latest rate-limit snapshot of any runtime job of the execution, whatever its outcome (ADR 0030); utilization is the reported fraction, reset times are ISO 8601 UTC, all null when no snapshot was seen. |
 | `execution_steps` | `execution_id`, `step` (`workspace`, `setup`, `agent`, `policy`, `commit`, `verify`, `review`, `push`, `pr`), `status`, `started_at`, `ended_at`, `detail` | One row per pipeline step. |
@@ -186,16 +189,40 @@ No migration is needed for it.
 ## 6. Git-side formats
 
 - **Project registration** `projects/<name>.json` in the Roster repo (ADR 0018):
-  `{ "name", "repoPath", "remote": "https://github.com/<owner>/<repo>", "defaultBranch": "main",
-  "setup": ["npm ci --ignore-scripts"], "verify": ["npm run typecheck", "npm test"],
-  "dependencyManifests": [...], "protectedPaths": [...], "image": "roster/runtime-claude" }`.
-  `protectedPaths` and `dependencyManifests` only add to the defaults. JSON, not YAML, so it parses
-  with built-ins.
+  `{ "name", "repoPath", "remote": "https://github.com/<owner>/<repo>", "baseBranch": "main",
+  "branchPrefix": "agent", "setup": ["npm ci --ignore-scripts"], "verify": ["npm run typecheck",
+  "npm test"], "dependencyManifests": [...], "protectedPaths": [...], "image": "roster/runtime-claude" }`.
+  `baseBranch` and `branchPrefix` are optional, default `main` and `agent`, and are validated as in
+  ADR 0032; the Roster repo's registration must resolve to `main` and `agent`. The former
+  `defaultBranch` key is invalid. `protectedPaths` and `dependencyManifests` only add to the defaults.
+  JSON, not YAML, so it parses with built-ins.
 - **Policy** `policies/mvp.json` and `policies/protected-paths.json` (ADR 0024, 0025).
 - **AgentDefinition v2** in `agents/<slug>.md` (ADR 0021).
 - **`tasks.md`** machine-readable format (ADR 0019). This plan's `tasks.md` uses it.
 - Roster reads registrations, policies and agent definitions from `origin/main` of the Roster repo
   (`git show origin/main:<path>` after a fetch), never from a working copy. Approved means merged.
+- Roster reads a project's intent (specs, plans, `tasks.md`, ADRs) from `origin/<baseBranch>` of the
+  project after a fetch (ADR 0032). Approved means merged into the base branch.
+
+### 6.1 Branches and base branch (ADR 0032)
+
+The agent namespace of a project is `agent/` when its `branchPrefix` is `agent`, and
+`<branchPrefix>/agent-` otherwise. One function in `core/domain` builds every agent branch name:
+
+| Branch | Name | Default | With prefix `feature` |
+| --- | --- | --- | --- |
+| Task, including WIP pushes | `<ns><NNN>-<Tnn>` | `agent/002-T01` | `feature/agent-002-T01` |
+| Spec draft | `<ns><NNN>-spec` | `agent/014-spec` | `feature/agent-014-spec` |
+| Plan | `<ns><NNN>-plan` | `agent/014-plan` | `feature/agent-014-plan` |
+| Hire (Roster repo only) | `agent/hire-<slug>` | `agent/hire-analyst` | not applicable |
+| Registration (Roster repo only) | `agent/project-<name>` | `agent/project-web` | not applicable |
+
+Every agent branch starts from `origin/<baseBranch>` (or resumes `origin/<name>` when it exists), and
+every PR targets `baseBranch`. Pushes to the Roster repo always use `main` and `agent`. The push guard
+receives `{ baseBranch, branchPrefix }` from the composition root when the workspace is created,
+validates them itself, and refuses anything but one agent-marker branch of that prefix; it never pushes
+`main`, `master`, `develop` or the base branch (ADR 0032 section 3). The human does not create
+branches inside a project's agent namespace.
 
 ## 7. CLI commands and data flow
 
@@ -203,12 +230,15 @@ All commands load `config.json`, open the store and apply migrations. Commands t
 jobs take the global lock first and refuse to start while another process holds it. Read-only
 commands (`roster status`, `roster watch`) never take the lock.
 
-### 7.1 `roster project add <name> --path <repo>`
+### 7.1 `roster project add <name> --path <repo> [--base <branch>] [--branch-prefix <prefix>]`
 
 1. Validate: path is a git repo, `origin` is `https://github.com/<owner>/<repo>`, the GitHub token can
-   read it, `main` is protected (PR required, no force push).
-2. Write `projects/<name>.json` in a fresh workspace of the Roster repo, commit, push
-   `agent/project-<name>`, open PR `project: register <name>`. This is the only code path allowed to
+   read it, `--base` and `--branch-prefix` (defaults `main` and `agent`) pass the rules of ADR 0032,
+   the base branch exists on `origin`, and the base branch and `main` (when different and present)
+   are protected (PR required, no force push).
+2. Write `projects/<name>.json` in a fresh workspace of the Roster repo (with `baseBranch` and
+   `branchPrefix` when they differ from the defaults), commit, push `agent/project-<name>`, open PR
+   `project: register <name>` against `main` of the Roster repo. This is the only code path allowed to
    push a change under `projects/**`.
 3. The project is usable once the file is on `origin/main` (next sync). Registration is reviewable in git.
 
@@ -216,23 +246,24 @@ During bootstrap the human writes `projects/roster.json` by hand (task T24).
 
 ### 7.2 `roster feature new <project> <slug> [--idea-file <file>]` (grilling, ADR 0020)
 
-1. Read the idea (file or multi-line stdin). Allocate the next free `NNN` from `specs/` on `origin/main`.
-   Create the feature in stage `idea` and store the idea text.
+1. Read the idea (file or multi-line stdin). Allocate the next free `NNN` from `specs/` on
+   `origin/<baseBranch>` of the project. Create the feature in stage `idea` and store the idea text.
 2. Move to `analysis`. Run job `analysis` (agent `analyst`) in a container on a fresh workspace of the
    project, with the idea and the project's `AGENTS.md` and constitution paths. Result: questions.
 3. Print each question in `human_language`, read the answer, store question and answer (`grilling`).
 4. Run job `spec-draft` (agent `analyst`) with idea + Q&A. Allowed paths: `specs/<NNN-slug>/spec.md`
    only. If it returns new questions, repeat 3-4 (at most 3 rounds, then stop with a reason).
-5. Roster commits the draft, pushes `agent/<NNN>-spec`, opens PR `spec(<NNN-slug>): <title>`.
-   Step = `spec_pr_open`. The human reviews; merging is the approval.
+5. Roster commits the draft, pushes the spec branch (`<ns><NNN>-spec`, section 6.1), opens PR
+   `spec(<NNN-slug>): <title>` against the base branch. Step = `spec_pr_open`. The human reviews;
+   merging is the approval.
 
 ### 7.3 `roster feature import <project> <NNN-slug>` (adopt an existing feature)
 
 For features whose spec and plan were approved before the store existed (spec 002 itself).
-Requires `spec.md`, `plan.md` and `tasks.md` on `origin/main`. Records the stages in order with the
-commits that brought each file to `main` as evidence, then imports `tasks.md` (ADR 0019).
-Boxes checked `[x]` import as `done` with that evidence. Each recorded transition names its evidence,
-so no stage is skipped.
+Requires `spec.md`, `plan.md` and `tasks.md` on `origin/<baseBranch>` of the project. Records the
+stages in order with the commits that brought each file to the base branch as evidence, then imports
+`tasks.md` (ADR 0019). Boxes checked `[x]` import as `done` with that evidence. Each recorded
+transition names its evidence, so no stage is skipped.
 
 ### 7.4 `roster run [--dry-run]` (ADR 0015)
 
@@ -284,8 +315,9 @@ protected-path request cannot be resolved here: only the human pushes that branc
 
 Checks and prints pass/fail: Node >= 24; pinned install clean and its commit on `origin/main` (and
 how far behind); Docker reachable; images present for the pinned commit; Claude token and GitHub
-token present (never printed); `gh` reachable with the token; every registered project's `main`
-protection; Task Scheduler task registered; free disk space for workspaces.
+token present (never printed); `gh` reachable with the token; every registered project's base branch
+exists and the base branch and `main` (when different and present; a missing `main` is reported, not
+failed) are protected (ADR 0032); Task Scheduler task registered; free disk space for workspaces.
 
 ### 7.9 `roster sync`
 
@@ -399,14 +431,14 @@ Each step is recorded in `execution_steps`. Any exception after the execution st
 
 1. **Workspace.** Clone the project from its local path into
    `workspaces\<project>\<execution-id>\` with a separate git dir (`git\`) and work tree (`tree\`),
-   set `origin` to the GitHub remote, fetch. Branch `agent/<NNN>-<Tnn>`: if it exists on `origin`,
-   check it out and mark the run as resuming; else create it from `origin/main`. The work tree has no
-   `.git` entry. Every git call passes `--git-dir`, `--work-tree` and safe config
-   (`core.hooksPath` to an empty dir, `core.fsmonitor=false`, `core.autocrlf=false`, no credential
-   helper except for push).
+   set `origin` to the GitHub remote, fetch. Branch: the task's agent branch (`<ns><NNN>-<Tnn>`,
+   section 6.1; `agent/<NNN>-<Tnn>` by default): if it exists on `origin`, check it out and mark the
+   run as resuming; else create it from `origin/<baseBranch>`. The work tree has no `.git` entry.
+   Every git call passes `--git-dir`, `--work-tree` and safe config (`core.hooksPath` to an empty dir,
+   `core.fsmonitor=false`, `core.autocrlf=false`, no credential helper except for push).
 2. **Setup** (if the project declares `setup`). Allowed when the dependency manifests equal
-   `origin/main` or an approval exists for their current hash; otherwise skipped and the agent is
-   told dependencies are not installed. Runs in a `setup` container (section 9) with egress to the
+   `origin/<baseBranch>` or an approval exists for their current hash; otherwise skipped and the agent
+   is told dependencies are not installed. Runs in a `setup` container (section 9) with egress to the
    package registry only, no token.
 3. **Agent.** Write the `in\` files: `prompt.md` (task body, acceptance criteria, spec and plan paths,
    resume note, retry note, result contract, and the fact that git and network are unavailable),
@@ -435,15 +467,15 @@ Each step is recorded in `execution_steps`. Any exception after the execution st
    the branch is pushed through the range check and guard of step 9 so the work survives; no PR
    (open question 5).
 8. **Review.** Run job `review` (agent `code-reviewer`) with the work tree mounted read-only and the
-   diff, the task's acceptance criteria and the ADR list in `in\`. Result: verdict and findings.
-   A review error or invalid result does not block: the PR body says the review is missing and why.
-   Review `quota_exhausted` ─► WIP flow as in step 3.
-9. **Push.** Re-run the policy check over the whole range `origin/main..HEAD` (covers commits from
-   earlier resumed runs), then push through the guard: only `refs/heads/agent/*`, never `--force`,
-   never `main`.
-10. **PR.** Create or reuse the PR against `main`, title `<NNN>-<Tnn>: <title>`, body: task id, review
-    verdict and findings, agent summary, agent's verification, Roster's verification results, notes,
-    execution id. Task `in_review`.
+   diff `origin/<baseBranch>..HEAD`, the task's acceptance criteria and the ADR list in `in\`. Result:
+   verdict and findings. A review error or invalid result does not block: the PR body says the review
+   is missing and why. Review `quota_exhausted` ─► WIP flow as in step 3.
+9. **Push.** Re-run the policy check over the whole range `origin/<baseBranch>..HEAD` (covers commits
+   from earlier resumed runs), then push through the guard: only the project's agent branches
+   (section 6.1), never `--force`, never `main`, `master`, `develop` or the base branch.
+10. **PR.** Create or reuse the PR against the project's base branch, title `<NNN>-<Tnn>: <title>`,
+    body: task id, review verdict and findings, agent summary, agent's verification, Roster's
+    verification results, notes, execution id. Task `in_review`.
 11. **Record.** Execution `succeeded` with head commit and PR link. The workspace is removed when the
     task is `done`; it is kept for stopped, blocked and failed tasks and cleaned after
     `workspaceRetentionDays`.
@@ -543,7 +575,7 @@ are removed when the execution ends.
 | Write in work tree | automatic | `/workspace` rw mount; read-only root FS; tmpfs elsewhere. Allowed paths per job kind checked after the run (step 5). |
 | Run commands and tests | automatic | `shell` capability in managed settings; commands run inside the container only. |
 | Install dependencies | human approval | No registry egress for agent jobs; setup runs only from unchanged or approved manifests; changed manifests stop the task with an approval request; deny rules as second line. |
-| Commit, push, PR | Roster only | No `.git` and no GitHub credentials in the container; Roster commits and pushes through `push-guard.ts`. |
+| Commit, push, PR | Roster only | No `.git` and no GitHub credentials in the container; Roster commits and pushes through `push-guard.ts`, bound to the project's branch rules (ADR 0032). |
 | Delete outside work tree | never | Nothing outside the work tree is mounted. |
 | Migrations, deploys | never | No network except allowlisted hosts; no database or cloud credentials exist in the container. |
 | Change safety (policies, settings, hooks, guards, constitution) | never unattended | Protected-path check before any push (steps 5 and 9); the pinned orchestrator runs from `main` (ADR 0025). |
@@ -563,7 +595,8 @@ Exceptions: the hire job may change `agents/**` and `skills/registry.md` and not
 `roster project add` may change one file under `projects/**`. Projects may add paths in their
 registration; they cannot remove defaults. Guard files are written once in the walking skeleton and
 cover every job profile, so later tasks do not need to touch them. Tasks known to touch protected
-paths carry `Needs human` in `tasks.md`.
+paths carry `Needs human` in `tasks.md`. ADR 0032 changes the push guard once more, in the skeleton
+(task T43, `Needs human`).
 
 ## 12. Credentials
 
@@ -596,6 +629,8 @@ written (ADR 0031). Tokens never appear in command-line arguments, error message
   signals.
 - Log files are written by the `roster run` process and read by `roster watch` from another process
   of the same user; neither opens them exclusively, and `watch` re-opens them on each poll (H11).
+- Loose git refs live in the NTFS file system, which ignores case, so `Feature/x` and `feature/x`
+  would collide in a workspace git dir. `branchPrefix` is lowercase only (ADR 0032).
 
 ## 14. Agent contracts (ADR 0026)
 
@@ -626,6 +661,9 @@ container/devops, Windows/PowerShell, docs. `hr-director` assigns the specialist
 | Agent edits project `.claude/settings.json` or `.mcp.json` to widen its own permissions mid-run. | Managed settings with managed-only rules and hooks; `--strict-mcp-config`; protected paths stop the push. |
 | Pushing a branch with modified workflows runs them on GitHub with secrets. | `.github/workflows/**` is protected; the PAT has no Workflows permission. |
 | Guard code is weakened by a merged PR the human did not read carefully. | Guard files are protected, so only the human pushes them; the pinned install updates only when the human runs the install script. |
+| A configurable branch prefix lets Roster push to a human branch, to `main` or to the base branch. | Agent marker in every name; the guard is bound per workspace to validated rules, re-implements its checks without importing unprotected code, and refuses `main`, `master`, `develop` and the base branch whatever the rules (ADR 0032). Rules come only from registrations on `origin/main` of the Roster repo. |
+| A wrong base branch (missing, or `main` in a gitflow repo) makes branches start from the wrong place and the range check sees unrelated commits. | `roster project add` and `doctor` check that the base branch exists and is protected; the registration is reviewed in a PR. |
+| A human branch inside a project's agent namespace, or a branch named exactly like the prefix. | Documented rule: the agent namespace belongs to Roster. A same-name branch is resumed as Roster's own; a ref conflict makes the push fail, which ends the task `failed` without damage. |
 | `node:sqlite` changes behavior (H1). | Store behind a port; migration tests; fallback option in ADR 0017. |
 | Claude Code CLI changes flags or output format. | Version pinned in the image; upgrades go through a PR; adapter tests with recorded streams. `roster watch` skips lines it does not recognize, so a format change shows fewer lines and never fails. |
 | Quota exhaustion not detected (H5). | Ends as `failed`, which is safe; patterns in one constant with tests. |
@@ -665,3 +703,7 @@ should skip work when the 7-day utilization is high stays open.
 Live activity view, added by the human the same day (spec user story 8): `roster watch` (section
 7.12, ADR 0031, task T41). It reads the store and the redacted job logs, and is read-only. The later
 web dashboard will read the same data; it is not designed here.
+
+Base branch and branch prefix per project, requested by the human the same day for gitflow projects
+(spec user story 9): ADR 0032 (Proposed), section 6.1, follow-up tasks T42, T43 and T44 for the done
+tasks T09, T10 and T11. One prefix per project; a prefix per task is out of scope.

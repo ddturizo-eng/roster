@@ -3,6 +3,8 @@
 - Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
 - Deciders: architect, human
+- Amended by: 0032 (decision 2: the range is `origin/<baseBranch>..HEAD` of the project; decisions 3
+  and 4 are unchanged, and the Roster repo is fixed to `main`)
 
 ## Context
 

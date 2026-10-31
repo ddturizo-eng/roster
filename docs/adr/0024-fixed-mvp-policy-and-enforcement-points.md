@@ -3,6 +3,9 @@
 - Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
 - Deciders: architect, human
+- Amended by: 0032 (`vcs_write`: the guard pushes only the project's agent branches, never `main`,
+  `master`, `develop` or the base branch; `install_dependencies`: manifests compared with
+  `origin/<baseBranch>`)
 
 ## Context
 
