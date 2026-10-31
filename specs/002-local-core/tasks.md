@@ -127,7 +127,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 
 ## T06. SQLite store: engine, migrations, projects, features and tasks
 
-- [ ] Done
+- [x] Done
 - Depends on: T02
 - Profile: TS adapters
 - Agent: roster-sqlite-store-engineer
