@@ -245,7 +245,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T15. Docker sandbox adapter
 
-- [ ] Done
+- [x] Done
 - Depends on: T02, T08, T13, T14
 - Profile: TS adapters
 - Agent: roster-boundary-adapters-engineer
