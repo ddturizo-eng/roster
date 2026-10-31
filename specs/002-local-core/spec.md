@@ -7,6 +7,8 @@
 - Inputs: `docs/architecture/vision.md`, ADR 0014
 - Amended: 2026-10-30, live activity view `roster watch` (user story 8), added by the human; merging
   its PR is the approval.
+- Amended: 2026-10-30, base branch and agent branch prefix per project (ADR 0032), requested by the
+  human for gitflow projects; merging its PR is the approval.
 
 ## Problem
 
@@ -32,7 +34,8 @@ Roster's own repository is a registered project like any other, so Roster can bu
 3. As the human, I want to approve the spec and then the plan, and nothing to be implemented before
    both are approved.
 4. As the human, I want each task of an approved plan executed by a fitting specialist in an isolated
-   container, and to find the result as a PR on branch `agent/<feature>-<task>`.
+   container, and to find the result as a PR on the task's agent branch: `agent/<feature>-<task>` by
+   default, or `<prefix>/agent-<feature>-<task>` when the project uses another branch prefix.
 5. As the human, I want to leave ready tasks before going to sleep, with my PC on, and find reviewable
    PRs in the morning.
 6. As the human, I want a blocked or ambiguous task to stop with its question written in my language,
@@ -42,6 +45,9 @@ Roster's own repository is a registered project like any other, so Roster can bu
 8. As the human, I want to watch live in the terminal which agent is running, on which task, and what
    it is doing right now, step by step, so I can follow an execution of any project without opening
    its log files.
+9. As the human, I want a project that uses gitflow to get agent branches from its base branch (for
+   example `develop`), PRs against that branch, and branch names under its own prefix (for example
+   `feature/`), so Roster fits the project's conventions.
 
 ## Acceptance criteria
 
@@ -49,6 +55,8 @@ Roster's own repository is a registered project like any other, so Roster can bu
 
 - [ ] A project is registered with a name, a local repo path and its GitHub remote. Registration is
       reviewable in git.
+- [ ] A registration may name the project's base branch (default `main`) and agent branch prefix
+      (default `agent`). The Roster repo itself always uses `main` and `agent` (ADR 0032).
 - [ ] A feature moves through these stages, in order: idea, analysis, spec approved, plan approved,
       execution, delivered. It never skips a stage.
 - [ ] From an idea, an analyst agent produces open questions and, after the human's answers, a spec
@@ -76,8 +84,9 @@ Roster's own repository is a registered project like any other, so Roster can bu
       validates before doing anything else.
 - [ ] After the agent finishes, Roster runs the project's verification commands itself and records
       their outcome.
-- [ ] Roster, not the agent, commits, pushes branch `agent/<feature>-<task>` and opens a PR against
-      `main` that names the task. It never pushes to `main` and never force-pushes.
+- [ ] Roster, not the agent, commits, pushes the task's agent branch (created from the project's base
+      branch) and opens a PR against the base branch that names the task. It never pushes to `main`
+      or to the base branch, never pushes a branch without the agent marker, and never force-pushes.
 - [ ] A change that touches a protected path (policies, permission settings, hooks, guards,
       constitution) is not pushed; the task stops and asks the human.
 - [ ] A failed or ambiguous task stops with its reason or question written in `human_language`.
@@ -115,6 +124,8 @@ Roster's own repository is a registered project like any other, so Roster can bu
 - Memory beyond the project's versioned documents and the execution log.
 - C4 diagram generation.
 - Any Linear integration, and multi-user features.
+- A different branch prefix per task (for example `fix/` for some tasks and `feature/` for others):
+  one prefix per project (ADR 0032).
 
 ### Decisions (answered by the human on 2026-10-30)
 
@@ -134,6 +145,10 @@ Roster's own repository is a registered project like any other, so Roster can bu
   wants one place to see which agent is running and what it is doing right now. Concurrency stays 1,
   so there is at most one running agent. A later web dashboard will read the same data; its design
   is out of scope here.
+- **Base branch and branch prefix (requested by the human on 2026-10-30):** many target projects use
+  gitflow. Each registration may set `baseBranch` and `branchPrefix` (user story 9, ADR 0032). The
+  human protects `main` and the base branch on GitHub and reviews every PR; Roster only opens PRs and
+  never merges. For a project with base `develop`, "approved" means merged into `develop`.
 
 ### Code review
 

@@ -3,6 +3,7 @@
 - Status: Accepted (2026-10-30, PR #3 merged)
 - Date: 2026-10-30
 - Deciders: architect, human
+- Amended by: 0032 (import evidence is the commit on the project's base branch)
 
 ## Context
 

@@ -4,7 +4,8 @@
 - Date: 2026-10-30
 - Deciders: architect, human
 - Supersedes: 0013
-- Amended by: 0030
+- Amended by: 0030; 0032 (decision 1: the pushed branch is the task's agent branch of ADR 0032,
+  `agent/<NNN>-<Tnn>` by default)
 
 ## Context
 

@@ -2,10 +2,13 @@
 
 - Spec: `specs/002-local-core/spec.md`
 - Plan: `specs/002-local-core/plan.md`
-- ADRs: 0015-0029 (Accepted 2026-10-30, PR #3), 0030 (Accepted 2026-10-30), 0031 (Proposed 2026-10-30)
+- ADRs: 0015-0029 (Accepted 2026-10-30, PR #3), 0030 (Accepted 2026-10-30), 0031 (Proposed 2026-10-30),
+  0032 (Proposed 2026-10-30)
 - Format: machine-readable, ADR 0019. Roster imports this file with `roster feature import`.
 - Status: Approved (2026-10-30, PR #3). Amended 2026-10-30: T41 (`roster watch`) added, with hooks
-  in T04, T15, T39 and T40.
+  in T04, T15, T39 and T40. Amended 2026-10-30: T42, T43 and T44 (base branch and branch prefix per
+  project, ADR 0032) added as follow-ups of the done tasks T09, T10 and T11, with criteria changed in
+  T19, T20, T21, T22, T24, T26, T28, T33, T34, T35, T36, T39 and T40.
 
 Each task is about 2 h of agent work, ends with a PR against `main` from `agent/002-<Tnn>`, and checks
 its own `Done` box in that PR (constitution, definition of done). `Depends on` is the authoritative
@@ -18,15 +21,15 @@ task, because every container and runtime task depends on its findings. T17, the
 to Phase B: with one runtime, T20 resolves `claude-code` directly. Ids are unchanged; file order is
 the selection order (ADR 0019).
 
-**Walking skeleton cut-off: T24.** The Phase A tasks (T14, T01-T13, T15, T16, T18-T24) are the bootstrap: they run in supervised sessions,
+**Walking skeleton cut-off: T24.** The Phase A tasks (T14, T01-T13, T15, T16, T42-T44, T18-T24) are the bootstrap: they run in supervised sessions,
 one at a time, tracked by this file and PRs (ADR 0014). T24 installs Roster, imports this file into
 the store and makes the first real `roster run`. From T25 on, Roster executes its own tasks; tasks that
 touch protected paths (ADR 0025) carry `Needs human`.
 
 Guard files are written once in the skeleton and cover every job profile, so later tasks do not touch
-them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `container/**` (T13),
-`src/adapters/sandbox/docker/isolation.ts` (T15), `src/adapters/runtime/claude-code/managed-settings.ts`
-(T16).
+them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project branch rules in T43),
+`container/**` (T13), `src/adapters/sandbox/docker/isolation.ts` (T15),
+`src/adapters/runtime/claude-code/managed-settings.ts` (T16).
 
 ## Phase A — Walking skeleton (bootstrap)
 
@@ -272,6 +275,51 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Reading `/roster/out/result.json` and validating it is left to the orchestrator.
 - Verification: unit tests with the T14 fixtures and synthetic fixtures for each outcome; the `success-pong.jsonl` fixture yields status `allowed`, type `five_hour`, utilization 0.04 and 0.6 and both reset times; synthetic quota fixtures cover a 5-hour exhaustion, a 7-day exhaustion (7-day reset and window `seven_day` chosen) and a stream with no `rate_limit_event` (no `quotaResetsAt`); snapshot of the generated managed settings for each capability set.
 
+## T42. Registration: base branch, branch prefix and agent branch names
+
+- [ ] Done
+- Depends on: T09
+- Profile: TS core
+- Areas: `src/core/domain/project.ts`, `src/core/domain/branches.ts`, `src/core/orchestrator/projects.ts`, tests
+- Acceptance criteria:
+  - Follow-up of T09 for ADR 0032. `ProjectRegistration` drops `defaultBranch` and gains `baseBranch` and `branchPrefix`, always set after parsing (defaults `main` and `agent` when the file omits them).
+  - `parseRegistration` validates both fields with the rules of ADR 0032 section 1 and reports file and field: `baseBranch` is a plain branch name of 1 to 100 characters, does not start with `agent/`, has no segment starting with `agent-`, and differs from `branchPrefix`; `branchPrefix` matches `^[a-z][a-z0-9_-]{0,31}$` and is none of `main`, `master`, `develop`, `head`, `refs`, `origin`.
+  - A file that still has `defaultBranch` is invalid, with a message that names `baseBranch`. Messages never echo the value (T09 rule).
+  - `readProjects` reports the Roster repo's registration as invalid (and skips it) unless it resolves to `baseBranch` `main` and `branchPrefix` `agent`. `REGISTRY_REF` stays `origin/main`.
+  - `src/core/domain/branches.ts` is pure and is the only place that formats agent branch names: `taskBranch(rules, NNN, Tnn)`, `specBranch(rules, NNN)`, `planBranch(rules, NNN)`, `hireBranch(slug)` and `registrationBranch(name)` produce the names of ADR 0032 section 2 (namespace `agent/` for prefix `agent`, `<prefix>/agent-` otherwise); `ROSTER_REPO_BRANCH_RULES` is `{ baseBranch: 'main', branchPrefix: 'agent' }` and is used by the hire and registration builders. Inputs are validated (three-digit `NNN`, task key, slug pattern) with typed errors.
+  - `isAgentBranch(rules, name)` is true exactly for names in the project's agent namespace with one segment after the prefix.
+- Verification: unit tests: defaults when both fields are absent; each invalid value (reserved prefix, uppercase prefix, two-segment prefix, base under `agent/`, base with an `agent-` segment, base equal to the prefix, base over 100 characters); a stale `defaultBranch`; the Roster repo registered with `develop` or prefix `feature` rejected; name tables for prefixes `agent` and `feature` (`agent/002-T01`, `feature/agent-002-T01`, spec, plan, hire, registration); `isAgentBranch` false for `feature/login`, `agent/x/y`, `feature/agent-` and `agent/002-T01` under prefix `feature`.
+
+## T43. Push guard and git adapter: project branch rules
+
+- [ ] Done
+- Depends on: T10, T42
+- Needs human: changes the protected path `src/adapters/vcs/push-guard.ts` (ADR 0025); the human pushes the branch
+- Profile: TS adapters
+- Areas: `src/adapters/vcs/push-guard.ts`, `src/adapters/vcs/git/`, `src/ports/vcs.ts`, `test/fakes/`, tests (protected path: `push-guard.ts`)
+- Acceptance criteria:
+  - Follow-up of T10 for ADR 0032 section 3. `push-guard.ts` exports `createPushGuard({ baseBranch, branchPrefix })`, which validates the rules itself (patterns and reserved names of ADR 0032 section 1) and returns a frozen `{ pushArguments(branch), assertSafePush(argv) }`; invalid rules throw `PushRejectedError`.
+  - The guard imports nothing from `core` except the error type, and does not call the T42 naming or registration code.
+  - The destination must be `refs/heads/<branchPrefix>/<one segment>`; when the prefix is not `agent`, the segment starts with `agent-` and has at least one character after it. `refs/heads/main`, `refs/heads/master`, `refs/heads/develop` and `refs/heads/<baseBranch>` are always refused.
+  - Every other T10 rule is unchanged: remote `origin`, the fixed options, exactly one `R:R` refspec with the same source and destination, no `+`, no force option, no delete, the safe global options and the push-only credential helper.
+  - `WorkspaceSource` gains `baseBranch` and `branchPrefix`. `GitVcsOptions.pushGuard` becomes a factory with the signature of `createPushGuard`, called once in `createWorkspace` with the source's rules; there is still no unguarded push, and a workspace cannot change its rules afterwards.
+  - `prepareBranch(name)` checks out `origin/<name>` when it exists (`resumed: true`), otherwise creates the branch from `origin/<baseBranch>`; a missing base fails with `NotFoundError` naming `origin/<baseBranch>`.
+  - Port comments and the fake VcsPort follow the new signatures.
+- Verification: guard table tests for prefixes `agent` and `feature` with bases `main` and `develop`: `agent/002-T01` and `feature/agent-002-T01` allowed under their own prefix; refused `feature/login`, `agent/002-T01` under prefix `feature`, `feature/agent-`, `feature/agent-x/y`, `main`, `master`, `develop`, the base branch, `+` refspecs, every force option, a delete and two refspecs; invalid rules refused at creation (reserved prefix, uppercase prefix, base under `agent/`, base equal to the prefix). Git tests against temporary repos with a bare `origin` that has `main` and `develop`: a fresh branch starts from `origin/develop`, resume still works, a missing base fails, and the T10 tests still pass.
+
+## T44. GitHub adapter: PRs against the base branch and branch protection
+
+- [ ] Done
+- Depends on: T11, T42
+- Profile: TS adapters
+- Areas: `src/adapters/forge/github/`, `src/ports/forge.ts`, `test/fakes/`, tests
+- Acceptance criteria:
+  - Follow-up of T11 for ADR 0032 sections 4 and 5. `ensurePr({ repo, branch, base, title, body })` reuses the open PR from `branch` into `base` or creates one; `base` is validated as a plain branch name; the lookup matches both head and base. The constant `BASE_BRANCH` is removed.
+  - The branch check accepts only the agent namespace forms of ADR 0032 (`agent/<one segment>`, or `<prefix>/agent-<rest>` with one segment after the prefix) and refuses a branch equal to `base`, `main`, `master` or `develop`.
+  - `mainProtection(repo)` is replaced by `branchProtection(repo, branch)`, returning `missing` (404 from the branches endpoint), `unknown`, or `{ prRequired, forcePushBlocked }`, combining rulesets and classic protection as T11 does.
+  - The token and PR body rules of T11 are unchanged.
+- Verification: unit tests with the stubbed runner: create and reuse against `develop`; an open PR from the same branch into another base is not reused; branch checks for both namespace forms; `branchProtection` for a protected, an unprotected, an unreadable and a missing branch; the adapted T11 tests pass.
+
 ## T18. Sync of task PR states
 
 - [ ] Done
@@ -288,35 +336,35 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 ## T19. Feature import (adopt) and `tasks.md` import
 
 - [ ] Done
-- Depends on: T04, T07, T09, T10
+- Depends on: T04, T07, T09, T10, T42
 - Profile: TS core
 - Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/import.ts`, tests
 - Acceptance criteria:
-  - `importFeature(project, "NNN-slug")` requires `spec.md`, `plan.md` and `tasks.md` on `origin/main`, records the stages `idea` to `plan_approved` in order with the commit that brought each file to `main` as evidence, imports `tasks.md` and moves the feature to `execution`.
+  - `importFeature(project, "NNN-slug")` requires `spec.md`, `plan.md` and `tasks.md` on `origin/<baseBranch>` of the project (ADR 0032), records the stages `idea` to `plan_approved` in order with the commit that brought each file to the base branch as evidence, imports `tasks.md` and moves the feature to `execution`.
   - Import errors and cycles write nothing and return the parser's messages.
   - `[x] Done` tasks import as `done` on first import (ADR 0019); re-import applies `planReimport`.
   - Importing `specs/002-local-core` of this repository works on a fixture repo.
-- Verification: unit tests with a fake VcsPort: fresh import, cycle rejection, re-import with a removed unstarted task, re-import rejected while a task is running.
+- Verification: unit tests with a fake VcsPort: fresh import, import from a project whose base branch is `develop` (files only on `origin/develop`), cycle rejection, re-import with a removed unstarted task, re-import rejected while a task is running.
 
 ## T20. Orchestrator: task pipeline happy path
 
 - [ ] Done
-- Depends on: T03, T07, T08, T10, T11, T15, T16, T18, T19
+- Depends on: T03, T07, T08, T10, T11, T15, T16, T18, T19, T42, T43, T44
 - Profile: TS core
 - Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/run.ts`, `src/core/orchestrator/prompt.ts`, tests
 - Acceptance criteria:
   - With injected ports, runs plan 002 section 8 steps 1, 3, 4, 5, 6, 9, 10 and 11 (setup, verify and review come in T25, T26 and T36): workspace, agent job, result validation, policy check, commit, push, PR, record.
   - The prompt contains the task text, acceptance criteria, spec and plan paths, the result contract, the statement that git and network are unavailable, and resume and retry notes when they apply.
-  - Branch `agent/<NNN>-<Tnn>`; PR title `<NNN>-<Tnn>: <title>`; PR body with task id, summary, agent verification, notes and execution id.
+  - The workspace is created with the project's `baseBranch` and `branchPrefix` from the registration loaded by sync; the branch is `taskBranch` of T42 (`agent/<NNN>-<Tnn>` by default, `<prefix>/agent-<NNN>-<Tnn>` otherwise); the policy check of step 9 covers `origin/<baseBranch>..HEAD`; the PR targets `baseBranch`. PR title `<NNN>-<Tnn>: <title>`; PR body with task id, summary, agent verification, notes and execution id.
   - A selected task without an approved agent ends `blocked` with the "no agent" reason (replaced by hiring in T28).
   - Nothing is pushed before the result is validated and the policy check passes.
   - Runtime resolution in the skeleton: the only runtime is `claude-code`; while its
     `runtime_state.cooldown_until` is in the future, the run exits 0 with "quota cooldown". The
     capability router replaces this in T17.
   - Runtime jobs go through one helper that, right after `interpret` and whatever the outcome, stores `detail.rateLimit` on the execution with `recordRateLimit` when present (ADR 0030). Later jobs (review, hire, stage jobs) reuse it.
-- Verification: unit test asserting the exact ordered list of side effects and store updates for the happy path (including the rate-limit record) and for "nothing to do".
+- Verification: unit test asserting the exact ordered list of side effects and store updates for the happy path (including the rate-limit record) and for "nothing to do"; the happy path also runs for a project with base `develop` and prefix `feature` and asserts the branch `feature/agent-<NNN>-<Tnn>`, the range base and the PR base.
 
 ## T21. Orchestrator: stop, failure, quota and recovery paths
 
@@ -330,11 +378,11 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - Missing or invalid result, `timeout`, `error`, no changes, or an exception after start ─► execution and task `failed` with the reason in `human_language`; nothing pushed.
   - Protected path or path outside the allowed ones ─► commit kept locally, task `blocked`, approval request `protected_path` naming the paths and the local branch; nothing pushed.
   - Changed dependency manifests ─► commit kept locally, task `blocked`, approval request `dependencies` with the manifest hash; nothing pushed.
-  - `quota_exhausted` ─► ADR 0028: WIP commit, guarded push without PR, task `todo`, runtime cooldown.
+  - `quota_exhausted` ─► ADR 0028: WIP commit, guarded push of the task's agent branch (ADR 0032) without PR, task `todo`, runtime cooldown.
   - Cooldown length (ADR 0030): `cooldown_until = detail.quotaResetsAt` with source `resets_at` and window `detail.quotaWindow` when it is later than now and at most 8 days after now; otherwise `now + quotaCooldownMinutes` with source `fallback` and no window. `quota_exhausted_at` is now in both cases.
   - The rate-limit snapshot is recorded on the execution on every path of this task that ran a runtime job, including `quota_exhausted`, `timeout` and `error`.
   - Start-of-run recovery: an execution left `running` by a dead PID ─► `interrupted`, task `failed`, sandbox `kill` called.
-  - The range check of step 9 covers commits from earlier resumed runs.
+  - The range check of step 9 covers `origin/<baseBranch>..HEAD`, including commits from earlier resumed runs.
 - Verification: one unit test per path asserting final states, events, message template and the absence of push or PR where required; cooldown tests with a fake clock for a 5-hour reset, a 7-day reset, a missing reset, a reset in the past and a reset more than 8 days ahead (the last three use the fallback).
 
 ## T22. CLI wiring: `run`, `feature import`, `sync`, `doctor`
@@ -348,8 +396,10 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - `roster run [--dry-run]` implements plan 002 section 7.4: lock with PID, interrupted recovery, `maxRunsPerNight` window, Docker check (exit 2), sync, one unit of work, exit 0 on every handled outcome and non-zero only on Roster bugs.
   - `--dry-run` prints the selected unit and planned steps and writes nothing except the sync cache.
   - `roster feature import <project> <NNN-slug>`, `roster sync` and `roster doctor` (checks of plan 002 section 7.8 that exist so far) are wired with real adapters.
+  - The composition root wires `createPushGuard` (T43) as the git adapter's guard factory.
+  - `doctor` checks, for every registered project, that the base branch exists and that the base branch and `main` (when different and present) are protected, through `branchProtection` (T44); a missing `main` is reported, not failed (ADR 0032).
   - The lock file is removed on every exit path, including uncaught errors and Ctrl+C.
-- Verification: unit tests with fakes per command; a `--dry-run` snapshot test; manual run of `roster doctor` on the human's PC pasted in the PR.
+- Verification: unit tests with fakes per command, including `doctor` for a project with base `develop` (protected, unprotected, missing `main`); a `--dry-run` snapshot test; manual run of `roster doctor` on the human's PC pasted in the PR.
 
 ## T23. Pinned install script and `roster.cmd` shim
 
@@ -376,7 +426,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - The human runs `claude setup-token` and `roster auth set claude`; creates the fine-grained PAT of ADR 0029 for the Roster repo and runs `roster auth set github`.
   - `main` of the Roster repo requires PRs and blocks force pushes, with no bypass.
   - Docker Desktop starts at sign-in with the WSL2 backend.
-  - The human commits `projects/roster.json` (with `setup` and `verify` commands) through a reviewed PR.
+  - The human commits `projects/roster.json` (with `setup` and `verify` commands, and with `baseBranch` and `branchPrefix` either omitted or set to `main` and `agent`, ADR 0032) through a reviewed PR.
   - `scripts/install.ps1` installed the pinned version; `roster doctor` passes.
   - `roster feature import roster 002-local-core` imports this file with every Phase A task before T24 `done`.
   - `roster run` executes the next ready Phase B task in a container and opens a PR from `agent/002-<Tnn>` without manual steps.
@@ -420,11 +470,11 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/setup.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
-  - Before the agent job, the project's `setup` commands run in the `setup` profile only when the work tree's dependency manifests equal `origin/main` or their SHA-256 matches a resolved `dependencies` approval for the task.
+  - Before the agent job, the project's `setup` commands run in the `setup` profile only when the work tree's dependency manifests equal `origin/<baseBranch>` (ADR 0032) or their SHA-256 matches a resolved `dependencies` approval for the task.
   - Otherwise setup is skipped and the prompt says dependencies are not installed.
   - A resolved approval is consumed by one successful execution; later manifest changes need a new approval.
   - Setup failure ─► task `failed` with the reason.
-- Verification: unit tests: unchanged manifests, approved hash, changed hash after approval, setup failure.
+- Verification: unit tests: unchanged manifests, approved hash, changed hash after approval, setup failure, and unchanged manifests compared with `origin/develop` for a project whose base is `develop`.
 
 ## T27. `roster retry`
 
@@ -450,10 +500,10 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Acceptance criteria:
   - Implements ADR 0027: hr-director job on a fresh Roster repo workspace with the task text, the target project's stack files and approved skills in `/roster/in`.
   - No changes and the slug on `origin/main` ─► assignment recorded, specialist runs in the same invocation.
-  - Changes ─► commit on `agent/hire-<slug>`, guarded push, PR `hire: <slug>` in the Roster repo, task `waiting_hire`.
+  - Changes ─► commit on `agent/hire-<slug>` (`hireBranch` of T42, workspace created with the Roster repo rules `main` and `agent`), guarded push, PR `hire: <slug>` against `main` of the Roster repo, task `waiting_hire`, whatever the target project's base branch and prefix.
   - Paths outside `agents/**` and `skills/registry.md`, invalid result or `needsHuman` ─► task `blocked`; nothing pushed.
   - Sync: hire PR merged ─► every task waiting for the slug returns to `todo` with the assignment.
-- Verification: unit tests with fakes for reuse, hire PR, invalid result, forbidden path, and the merge detected by sync.
+- Verification: unit tests with fakes for reuse, hire PR (also for a target project with base `develop` and prefix `feature`, where the hire branch and PR still use the Roster repo rules), invalid result, forbidden path, and the merge detected by sync.
 
 ## T29. Windows Task Scheduler integration
 
@@ -522,11 +572,11 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Agent: roster-core-ts-engineer
 - Areas: `src/cli/commands/feature-new.ts`, `src/core/orchestrator/analysis.ts`, `src/adapters/console/tty/`, tests
 - Acceptance criteria:
-  - Implements plan 002 section 7.2: idea from file or stdin, next free `NNN`, stages `idea` then `analysis`, analyst questions job, interactive questions and answers in the terminal, every question and answer stored.
+  - Implements plan 002 section 7.2: idea from file or stdin, next free `NNN` from `specs/` on `origin/<baseBranch>` of the project, stages `idea` then `analysis`, analyst questions job, interactive questions and answers in the terminal, every question and answer stored.
   - Spec draft job with allowed path `specs/<NNN-slug>/spec.md` only; more questions repeat the round, at most 3 rounds.
-  - Roster commits the draft on `agent/<NNN>-spec`, pushes, opens PR `spec(<NNN-slug>): <title>`, step `spec_pr_open`.
+  - Roster commits the draft on `specBranch` of T42 (`agent/<NNN>-spec` by default), pushes, opens PR `spec(<NNN-slug>): <title>` against the project's base branch, step `spec_pr_open`.
   - The command takes the global lock and refuses to run while another execution is running.
-- Verification: unit tests with fake console, sandbox and runtime for one round, two rounds, the round limit and a forbidden path.
+- Verification: unit tests with fake console, sandbox and runtime for one round, two rounds, the round limit and a forbidden path, and one round for a project with base `develop` and prefix `feature` (branch `feature/agent-<NNN>-spec`, PR into `develop`).
 
 ## T34. Gate detection and the architect stage job
 
@@ -536,10 +586,10 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/sync.ts`, `src/core/orchestrator/stage-jobs.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
-  - Sync: spec PR merged ─► `spec_approved`/`plan_job_pending` with the merge date; plan PR merged ─► `plan_approved`, then import, then `execution`, or `import_failed` with the parser's errors; all tasks `done` or `cancelled` ─► `delivered`.
-  - `roster run` picks a `plan_job_pending` feature before any task and runs the architect job (contract `architect`, allowed paths `specs/<feature>/**` and `docs/adr/**`), then commits on `agent/<NNN>-plan`, pushes and opens PR `plan(<NNN-slug>): ...`, step `plan_pr_open`.
+  - Sync: spec PR merged ─► `spec_approved`/`plan_job_pending` with the merge date; plan PR merged ─► `plan_approved`, then import from `origin/<baseBranch>` of the project, then `execution`, or `import_failed` with the parser's errors; all tasks `done` or `cancelled` ─► `delivered`.
+  - `roster run` picks a `plan_job_pending` feature before any task and runs the architect job (contract `architect`, allowed paths `specs/<feature>/**` and `docs/adr/**`), then commits on `planBranch` of T42 (`agent/<NNN>-plan` by default), pushes and opens PR `plan(<NNN-slug>): ...` against the project's base branch, step `plan_pr_open`.
   - Architect `blocked` ─► the question is shown by `roster status`; the step stays `plan_job_pending`.
-- Verification: unit tests with fakes for each transition and for the stage-job priority over tasks.
+- Verification: unit tests with fakes for each transition and for the stage-job priority over tasks, including a plan PR into `develop` for a project whose base is `develop`.
 
 ## T35. `roster project add`
 
@@ -549,10 +599,10 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Agent: roster-core-ts-engineer
 - Areas: `src/cli/commands/project-add.ts`, `src/core/orchestrator/projects.ts`, tests
 - Acceptance criteria:
-  - Implements plan 002 section 7.1: validates repo, `origin` URL, token access and `main` protection; writes `projects/<name>.json` in a fresh Roster repo workspace; commits; pushes `agent/project-<name>`; opens PR `project: register <name>`.
+  - Implements plan 002 section 7.1: `roster project add <name> --path <repo> [--base <branch>] [--branch-prefix <prefix>]` validates repo, `origin` URL, token access, the base branch and prefix rules of ADR 0032 (defaults `main` and `agent`), that the base branch exists, and the protection of the base branch and of `main` when different and present (`branchProtection`, T44); writes `projects/<name>.json` (with `baseBranch` and `branchPrefix` when they differ from the defaults) in a fresh Roster repo workspace; commits; pushes `agent/project-<name>` (`registrationBranch` of T42, Roster repo rules); opens PR `project: register <name>` against `main` of the Roster repo.
   - This is the only code path allowed to push a change under `projects/**`; it changes exactly one file there and nothing else.
   - Validation failures print the reason in `human_language` and write nothing.
-- Verification: unit tests with fakes for success and each validation failure.
+- Verification: unit tests with fakes for success with the defaults, success with `--base develop --branch-prefix feature`, and each validation failure (invalid prefix, missing base branch, unprotected base branch).
 
 ## Phase D — Code review
 
@@ -564,7 +614,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Agent: roster-core-ts-engineer
 - Areas: `src/core/orchestrator/review.ts`, `src/core/orchestrator/run.ts`, tests
 - Acceptance criteria:
-  - After verification passes and before the push, a `code-reviewer` job runs in the `review` profile (work tree read-only) with the diff `origin/main..HEAD`, the task's acceptance criteria and the list of ADR paths in `/roster/in`.
+  - After verification passes and before the push, a `code-reviewer` job runs in the `review` profile (work tree read-only) with the diff `origin/<baseBranch>..HEAD` (ADR 0032), the task's acceptance criteria and the list of ADR paths in `/roster/in`.
   - The verdict and findings go at the top of the PR body, grouped by severity.
   - A review error or invalid result does not block the PR; the PR body says the review is missing and why.
   - Review `quota_exhausted` follows ADR 0028, with the cooldown length of ADR 0030 (T21).
@@ -636,6 +686,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
   - `README.md` describes Roster as of spec 002 (no Linear), the layout and the commands.
   - `docs/runbook.md`: install and update of the pinned version, token setup and rotation, PAT repo list, Docker Desktop settings, scheduler, power settings for night runs, reading `roster status`, following a run live with `roster watch`, unblocking tasks, troubleshooting by symptom (Docker down, quota cooldown, protected path stop, dependency approval, interrupted run).
   - The quota cooldown entry explains the 5-hour and 7-day windows, the `fallback` source, and how to read the recorded utilization to tune `maxRunsPerNight` (ADR 0030).
+  - The runbook explains `baseBranch` and `branchPrefix` (ADR 0032): the agent branch names, that the human never creates branches in a project's agent namespace, that the base branch and `main` must be protected, and the troubleshooting entries "missing base branch" and "push rejected by a ref conflict".
   - Every command, path and setting named exists in the code or the plan.
 - Verification: link check; the PR lists each command named and the file that implements it.
 
@@ -648,9 +699,10 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10), `conta
 - Agent: roster-container-devops-engineer
 - Areas: a sandbox GitHub repo registered with Roster
 - Acceptance criteria:
-  - A sandbox project is registered with `roster project add` and the PR is merged.
+  - A sandbox project with protected `main` and `develop` branches is registered with `roster project add --base develop --branch-prefix feature` and the PR is merged.
   - An idea goes through grilling in the terminal, a spec PR, its merge, a scheduled architect run, a plan PR, its merge, and an automatic task import.
   - A scheduled night run executes one task in a container and leaves a PR with verification results and review findings.
+  - Every PR Roster opens in the sandbox comes from a `feature/agent-...` branch into `develop`; `main` and `develop` are never pushed.
   - A task with ambiguous text ends `blocked` with a Spanish question; `roster retry --note` resumes it.
   - A task that edits `.github/workflows/` stops with a protected-path request and nothing is pushed.
   - `roster stop` ends a running execution; `roster status` shows all of the above.
