@@ -7,7 +7,10 @@ export interface ProjectRegistration {
   readonly repoPath: string;
   /** `https://github.com/<owner>/<repo>` */
   readonly remote: string;
-  readonly defaultBranch: 'main';
+  /** ADR 0032; default `main`. Always set after parsing. */
+  readonly baseBranch: string;
+  /** ADR 0032; default `agent`. Always set after parsing. */
+  readonly branchPrefix: string;
   readonly setup: readonly string[];
   readonly verify: readonly string[];
   /** Added to the default dependency manifests of the policy; never removes a default. */
