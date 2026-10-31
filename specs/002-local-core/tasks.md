@@ -387,7 +387,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T22. CLI wiring: `run`, `feature import`, `sync`, `doctor`
 
-- [ ] Done
+- [x] Done
 - Depends on: T12, T21
 - Profile: TS core
 - Agent: roster-core-ts-engineer
