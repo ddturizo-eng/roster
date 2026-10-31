@@ -335,7 +335,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T19. Feature import (adopt) and `tasks.md` import
 
-- [ ] Done
+- [x] Done
 - Depends on: T04, T07, T09, T10, T42
 - Profile: TS core
 - Agent: roster-core-ts-engineer
