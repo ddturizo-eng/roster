@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { UnhandledStopError, approvedSkillNames, runNext, runRuntimeJob } from '../../../src/core/orchestrator/run.ts';
+import { approvedSkillNames, recoverInterrupted, runNext, runRuntimeJob } from '../../../src/core/orchestrator/run.ts';
 import type { RunDeps, RunOutcome } from '../../../src/core/orchestrator/run.ts';
 import { buildPrompt } from '../../../src/core/orchestrator/prompt.ts';
 import { parseRegistration } from '../../../src/core/orchestrator/projects.ts';
 import type { LoadedProject } from '../../../src/core/orchestrator/projects.ts';
+import { PushRejectedError } from '../../../src/core/domain/errors.ts';
 import { parsePolicy } from '../../../src/core/policy/policy.ts';
 import type { RateLimitSnapshot, RuntimeJob, RuntimeOutcome } from '../../../src/core/domain/runtime.ts';
 import type { Task } from '../../../src/core/domain/task.ts';
@@ -177,6 +178,7 @@ function setup(options: SetupOptions = {}) {
     commitAuthor: AUTHOR,
     policy,
     pid: 4242,
+    quotaCooldownMinutes: 300,
   };
   return { deps, input: { projects: [loaded] }, log, vcs, store, clock, forge, sandbox, runtime, fs, secrets, console: console_ };
 }
@@ -492,73 +494,268 @@ describe('runNext: quota cooldown', () => {
   });
 });
 
-describe('runNext: nothing is pushed before the result is valid and the policy check passes', () => {
-  const noPushOrPr = (log: CallLog): void => {
-    const names = effects(log);
-    expect(names).not.toContain('workspace.push');
-    expect(names).not.toContain('forge.ensurePr');
-    expect(log.of('secrets').filter((c) => c.args[0] === 'github-token')).toEqual([]);
-  };
+const noPushOrPr = (log: CallLog): void => {
+  const names = effects(log);
+  expect(names).not.toContain('workspace.push');
+  expect(names).not.toContain('forge.ensurePr');
+  expect(log.of('secrets').filter((c) => c.args[0] === 'github-token')).toEqual([]);
+};
 
-  const outcomes: [string, RuntimeOutcome][] = [
-    ['timeout', { kind: 'timeout', detail: { rateLimit: RATE_LIMIT } }],
-    ['error', { kind: 'error', detail: { reason: 'turn limit', rateLimit: RATE_LIMIT } }],
-    ['quota_exhausted', { kind: 'quota_exhausted', detail: { rateLimit: RATE_LIMIT, quotaResetsAt: '2026-11-01T08:00:00.000Z', quotaWindow: 'five_hour' } }],
-    ['stopped', { kind: 'stopped', detail: {} }],
+/** Execution and task of the only task, after a stop path. */
+function finalState(store: FakeStore) {
+  const execution = store.listExecutions()[0]!;
+  return { execution, task: store.getTask('web:007-T05')! };
+}
+
+describe('runNext: stop paths of the agent job', () => {
+  const outcomes: [string, RuntimeOutcome, string, string][] = [
+    ['timeout', { kind: 'timeout', detail: { rateLimit: RATE_LIMIT } }, 'failed', 'The agent job reached its time limit of 90 minutes.'],
+    ['error', { kind: 'error', detail: { reason: 'turn limit', rateLimit: RATE_LIMIT } }, 'failed', 'The agent job failed: turn limit.'],
   ];
-  it.each(outcomes)('agent outcome %s -> stop path, snapshot recorded, nothing pushed', async (_name, outcome) => {
-    const { deps, input, log, runtime, store } = setup();
+  it.each(outcomes)('agent outcome %s -> failed with the reason, snapshot recorded, nothing pushed', async (_name, outcome, status, reason) => {
+    const { deps, input, log, runtime, store, console: out } = setup();
     runtime.responses.queue('interpret', outcome);
-    await expect(runNext(deps, input)).rejects.toMatchObject({ name: 'UnhandledStopError', stop: 'agent_outcome' });
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'failed', taskId: 'web:007-T05', reason });
     noPushOrPr(log);
     expect(effects(log)).not.toContain('workspace.commitAll');
-    const id = store.listExecutions()[0]!.id;
-    expect(store.getExecution(id)!.rateLimit).toEqual(outcome.detail.rateLimit ?? null);
-    expect(stepNames(store, id)).toEqual(['workspace:succeeded', 'agent:failed']);
+    const { execution, task } = finalState(store);
+    expect(execution).toMatchObject({ status, reason, rateLimit: outcome.detail.rateLimit, endedAt: FAKE_START_TIME });
+    expect(task).toMatchObject({ status: 'failed', stopReason: reason });
+    expect(stepNames(store, execution.id)).toEqual(['workspace:succeeded', 'agent:failed']);
+    expect(store.listEvents(execution.id).map((e) => [e.type, (e.payload as { kind: string }).kind])).toEqual([
+      ['outcome', outcome.kind],
+      ['stop', outcome.kind],
+    ]);
+    expect(out.stdout.slice(-2)).toEqual([`Reason: ${reason}`, `Execution ${execution.id} finished: failed.`]);
+    expect(store.listApprovals()).toEqual([]);
   });
 
-  const results: [string, string | null, string][] = [
-    ['missing result', null, 'result_missing'],
-    ['not JSON', 'not json', 'result_invalid'],
-    ['violates the contract', JSON.stringify({ status: 'done' }), 'result_invalid'],
-    ['blocked by the agent', JSON.stringify({ status: 'blocked', summary: 's', verification: '', questions: [{ text: 'Which API?' }] }), 'result_blocked'],
+  it('a stopped job -> execution and task stopped, nothing pushed', async () => {
+    const { deps, input, log, runtime, store } = setup();
+    runtime.responses.queue('interpret', { kind: 'stopped', detail: {} });
+    const result = await runNext(deps, input);
+    expect(result.kind).toBe('stopped');
+    noPushOrPr(log);
+    const { execution, task } = finalState(store);
+    expect(execution.status).toBe('stopped');
+    expect(task).toMatchObject({ status: 'stopped', stopReason: expect.stringContaining('Stopped by the human') });
+  });
+
+  it('writes the whole end state in one transaction', async () => {
+    const { deps, input, log, runtime } = setup();
+    runtime.responses.queue('interpret', { kind: 'error', detail: { reason: 'turn limit' } });
+    await runNext(deps, input);
+    const names = effects(log);
+    const tail = names.slice(names.indexOf('store.appendEvent') + 1);
+    expect(tail).toEqual([
+      'store.recordStep', // agent step failed
+      'store.transaction',
+      'store.updateTask',
+      'store.finishExecution',
+      'store.appendEvent',
+      'console.print',
+      'console.print',
+    ]);
+  });
+});
+
+describe('runNext: stop paths of the result', () => {
+  const invalid: [string, string | null, string][] = [
+    ['missing result', null, 'out/result.json is missing'],
+    ['not JSON', 'not json', 'is not valid JSON'],
+    ['violates the contract', JSON.stringify({ status: 'done' }), 'summary'],
   ];
-  it.each(results)('%s -> stop path before policy, commit and push', async (_name, resultText, stop) => {
-    const { deps, input, log } = setup({ resultText });
-    await expect(runNext(deps, input)).rejects.toMatchObject({ name: 'UnhandledStopError', stop });
+  it.each(invalid)('%s -> failed with the invalid-result reason, before policy, commit and push', async (_name, resultText, problem) => {
+    const { deps, input, log, store } = setup({ resultText });
+    const result = await runNext(deps, input);
+    expect(result.kind).toBe('failed');
     noPushOrPr(log);
     expect(effects(log)).not.toContain('workspace.changedPaths');
     expect(effects(log)).not.toContain('workspace.commitAll');
+    const { execution, task } = finalState(store);
+    expect(execution.status).toBe('failed');
+    expect(task.status).toBe('failed');
+    expect(task.stopReason).toContain('The specialist result is missing or invalid');
+    expect(task.stopReason).toContain(problem);
   });
 
-  const changes: [string, readonly string[], string][] = [
-    ['no changes', [], 'no_changes'],
-    ['protected path', ['src/a.ts', '.github/workflows/ci.yml'], 'protected_path'],
-    ['dependency manifest', ['package.json'], 'dependency_manifests'],
-    ['malformed path', ['../outside.txt'], 'protected_path'],
-  ];
-  it.each(changes)('%s -> stop path, no commit, no push, no PR', async (_name, paths, stop) => {
-    const { deps, input, log, vcs } = setup();
-    vcs.workspaceResponses.setDefault('changedPaths', () => paths);
-    const error: unknown = await runNext(deps, input).then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(error).toBeInstanceOf(UnhandledStopError);
-    expect((error as UnhandledStopError).stop).toBe(stop);
+  it('a result blocked by the agent -> task blocked with the questions, nothing pushed, no approval', async () => {
+    const resultText = JSON.stringify({
+      status: 'blocked',
+      summary: 's',
+      verification: '',
+      questions: [{ text: 'Which API?' }, { text: 'Keep the old route?' }],
+    });
+    const { deps, input, log, store, console: out } = setup({ resultText });
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'blocked', reason: 'agent_blocked' });
     noPushOrPr(log);
     expect(effects(log)).not.toContain('workspace.commitAll');
+    const { execution, task } = finalState(store);
+    expect(execution.status).toBe('blocked');
+    expect(task.status).toBe('blocked');
+    expect(task.stopReason).toBe('The agent is blocked and needs an answer: Which API? | Keep the old route?. Nothing was pushed.');
+    expect(JSON.parse(execution.resultJson!)).toMatchObject({ status: 'blocked' });
+    expect(store.listApprovals()).toEqual([]);
+    expect(out.stdout.at(-2)).toBe(`Reason: ${task.stopReason}`);
   });
 
-  it('a violation in the whole range (earlier resumed commits) stops before the push', async () => {
+  it('the human language is used for the reason', async () => {
+    const { deps, input, store } = setup({ resultText: null });
+    await runNext({ ...deps, language: 'es' }, input);
+    expect(finalState(store).task.stopReason).toContain('El resultado specialist falta o no es válido');
+  });
+});
+
+describe('runNext: stop paths of the policy check', () => {
+  it('no changes -> failed "no changes", no commit, nothing pushed', async () => {
+    const { deps, input, log, vcs, store } = setup();
+    vcs.workspaceResponses.setDefault('changedPaths', () => []);
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'failed', reason: 'The agent finished without changing any file.' });
+    noPushOrPr(log);
+    expect(effects(log)).not.toContain('workspace.commitAll');
+    const { execution, task } = finalState(store);
+    expect([execution.status, task.status]).toEqual(['failed', 'failed']);
+    expect(stepNames(store, execution.id).at(-1)).toBe('policy:failed');
+  });
+
+  const protectedCases: [string, readonly string[], string[]][] = [
+    ['protected path', ['src/a.ts', '.github/workflows/ci.yml'], ['.github/workflows/ci.yml']],
+    ['malformed path', ['../outside.txt'], ['../outside.txt']],
+  ];
+  it.each(protectedCases)('%s -> commit kept locally, task blocked, protected_path request, nothing pushed', async (_name, paths, named) => {
+    const { deps, input, log, vcs, store, console: out } = setup();
+    vcs.workspaceResponses.setDefault('changedPaths', () => paths);
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'blocked', reason: 'protected_path' });
+    noPushOrPr(log);
+    expect(vcs.workspaces[0]!.commits).toHaveLength(1);
+    expect(vcs.workspaces[0]!.pushes).toEqual([]);
+
+    const { execution, task } = finalState(store);
+    expect(execution).toMatchObject({ status: 'blocked', headCommit: 'commit1' });
+    expect(task.status).toBe('blocked');
+    expect(task.stopReason).toContain('protected or disallowed paths');
+    expect(task.stopReason).toContain(named.join(', '));
+    expect(task.stopReason).toContain('local branch agent/007-T05');
+    expect(task.stopReason).toContain(vcs.workspaces[0]!.paths.root);
+    const approvals = store.listApprovals();
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      taskId: 'web:007-T05',
+      kind: 'protected_path',
+      detail: { kind: 'protected_path', paths: named, branch: 'agent/007-T05' },
+      contentHash: null,
+      resolvedAt: null,
+    });
+    // The console line clips long parameters (safe-text); the stored reason is complete.
+    expect(out.stdout.at(-2)).toMatch(/^Reason: The changes touch protected or disallowed paths: /);
+  });
+
+  it('writes the commit, then the approval request and the end state in one transaction', async () => {
+    const { deps, input, log, vcs } = setup();
+    vcs.workspaceResponses.setDefault('changedPaths', () => ['.claude/settings.json']);
+    await runNext(deps, input);
+    const names = effects(log);
+    expect(names.slice(names.indexOf('workspace.commitAll'))).toEqual([
+      'workspace.commitAll',
+      'store.transaction',
+      'store.requestApproval',
+      'store.updateTask',
+      'store.finishExecution',
+      'store.appendEvent',
+      'console.print',
+      'console.print',
+    ]);
+  });
+
+  describe('dependency manifests', () => {
+    function manifestSetup() {
+      const s = setup();
+      s.vcs.workspaceResponses.setDefault('changedPaths', () => ['src/a.ts', 'package.json']);
+      s.vcs.workspaceResponses.setDefault('showFile', () => '{\n  "name": "web"\n}');
+      s.fs.responses.setDefault('readText', (path) =>
+        path.endsWith('/out/result.json') ? DONE_RESULT : path.endsWith('/tree/package.json') ? '{\n  "name": "web",\n  "dependencies": {"left-pad": "1.0.0"}\n}' : undefined,
+      );
+      return s;
+    }
+
+    it('-> commit kept locally, task blocked, dependencies request with the hash and the diff, nothing pushed', async () => {
+      const { deps, input, log, vcs, store, fs } = manifestSetup();
+      const result = await runNext(deps, input);
+      expect(result).toMatchObject({ kind: 'blocked', reason: 'dependencies' });
+      noPushOrPr(log);
+      expect(vcs.workspaces[0]!.commits).toHaveLength(1);
+
+      const hashCall = log.calls.find((c) => c.method === 'hashFiles')!;
+      expect(hashCall.args).toEqual([`${vcs.workspaces[0]!.paths.tree}`, ['package.json']]);
+      const hash = await fs.hashFiles(vcs.workspaces[0]!.paths.tree, ['package.json']);
+      const { execution, task } = finalState(store);
+      expect(execution).toMatchObject({ status: 'blocked', headCommit: 'commit1' });
+      expect(task.status).toBe('blocked');
+      expect(task.stopReason).toContain('Dependency manifests changed: package.json');
+      expect(task.stopReason).toContain(`hash ${hash}`);
+      expect(task.stopReason).toContain('roster retry web:007-T05 --approve-dependencies');
+      const request = store.listApprovals()[0]!;
+      expect(request).toMatchObject({ kind: 'dependencies', contentHash: hash, resolvedAt: null });
+      const detail = request.detail as unknown as { manifests: string[]; diff: string };
+      expect(detail.manifests).toEqual(['package.json']);
+      expect(detail.diff).toContain('*** package.json');
+      expect(detail.diff).toContain('+  "dependencies": {"left-pad": "1.0.0"}');
+    });
+
+    it('an approved request for the same hash lets the task through', async () => {
+      const { deps, input, store, fs } = manifestSetup();
+      const hash = await fs.hashFiles('/anywhere', ['package.json']);
+      const request = store.requestApproval({
+        taskId: 'web:007-T05',
+        kind: 'dependencies',
+        detail: { kind: 'dependencies', manifests: ['package.json'], diff: '' },
+        contentHash: hash,
+        createdAt: FAKE_START_TIME,
+      });
+      store.resolveApproval(request.id, 'approved', FAKE_START_TIME);
+      expect((await runNext(deps, input)).kind).toBe('pr_opened');
+    });
+
+    it('a pending or different-hash request does not', async () => {
+      const { deps, input, store, fs } = manifestSetup();
+      const hash = await fs.hashFiles('/anywhere', ['package.json']);
+      const pending = store.requestApproval({
+        taskId: 'web:007-T05',
+        kind: 'dependencies',
+        detail: { kind: 'dependencies', manifests: ['package.json'], diff: '' },
+        contentHash: hash,
+        createdAt: FAKE_START_TIME,
+      });
+      expect(pending.resolution).toBeNull();
+      expect((await runNext(deps, input)).kind).toBe('blocked');
+    });
+  });
+
+  it('a violation in the whole range (earlier resumed commits) -> blocked after the push step failed, nothing pushed', async () => {
     const { deps, input, log, vcs, store } = setup();
     vcs.workspaceResponses.queue('changedPaths', ['src/a.ts'], ['src/a.ts', '.claude/settings.json']);
-    await expect(runNext(deps, input)).rejects.toMatchObject({ stop: 'range_policy' });
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'blocked', reason: 'protected_path' });
     noPushOrPr(log);
-    // The commit exists locally (kept for T21), and the push step is the one that failed.
-    expect(effects(log)).toContain('workspace.commitAll');
-    const id = store.listExecutions()[0]!.id;
-    expect(stepNames(store, id).slice(-2)).toEqual(['commit:succeeded', 'push:failed']);
+    // One commit only: the step 6 commit; the range stop does not commit again.
+    expect(vcs.workspaces[0]!.commits).toHaveLength(1);
+    const { execution, task } = finalState(store);
+    expect(stepNames(store, execution.id).slice(-2)).toEqual(['commit:succeeded', 'push:failed']);
+    expect(execution).toMatchObject({ status: 'blocked', headCommit: 'commit1' });
+    expect(task.status).toBe('blocked');
+    expect(task.stopReason).toContain('.claude/settings.json');
+    expect(store.listApprovals()[0]).toMatchObject({ kind: 'protected_path' });
+  });
+
+  it('the range check covers origin/<baseBranch>..HEAD of the project', async () => {
+    const { deps, input, log, vcs } = setup({ registration: { baseBranch: 'develop' } });
+    vcs.workspaceResponses.queue('changedPaths', ['src/a.ts'], ['.claude/x']);
+    await runNext(deps, input);
+    expect(log.calls.filter((c) => c.method === 'changedPaths').map((c) => c.args[0])).toEqual(['origin/develop', 'origin/develop']);
   });
 
   it('push is called with the checked branch only after both policy checks', async () => {
@@ -569,6 +766,270 @@ describe('runNext: nothing is pushed before the result is valid and the policy c
     expect(names.lastIndexOf('workspace.changedPaths')).toBeLessThan(push);
     expect(names.indexOf('workspace.commitAll')).toBeLessThan(push);
     expect(names.indexOf('runtime.interpret')).toBeLessThan(push);
+  });
+});
+
+describe('runNext: an exception after the start', () => {
+  it('a rejected push -> execution and task failed with the error class only', async () => {
+    const { deps, input, log, vcs, store } = setup();
+    vcs.workspaceResponses.queueError('push', new PushRejectedError('agent/007-T05', 'rejected'));
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'failed', reason: 'The push job failed: PushRejectedError.' });
+    expect(effects(log)).not.toContain('forge.ensurePr');
+    const { execution, task } = finalState(store);
+    expect([execution.status, task.status]).toEqual(['failed', 'failed']);
+    expect(task.stopReason).toBe('The push job failed: PushRejectedError.');
+    expect(stepNames(store, execution.id).at(-1)).toBe('push:failed');
+  });
+
+  it('an exception while creating the workspace -> failed, nothing run', async () => {
+    const { deps, input, log, vcs, store } = setup();
+    vcs.responses.queueError('createWorkspace', new Error(`clone failed with ${FAKE_GH_TOKEN}`));
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'failed', reason: 'The workspace job failed: Error.' });
+    expect(effects(log)).not.toContain('sandbox.run');
+    const { execution, task } = finalState(store);
+    expect([execution.status, task.status]).toEqual(['failed', 'failed']);
+    expect(JSON.stringify(store.listEvents(execution.id))).not.toContain(FAKE_GH_TOKEN);
+  });
+
+  it('an exception while running the job -> failed', async () => {
+    const { deps, input, sandbox, store } = setup();
+    sandbox.responses.queueError('run', new Error('docker exploded'));
+    const result = await runNext(deps, input);
+    expect(result.kind).toBe('failed');
+    expect(finalState(store).task.status).toBe('failed');
+  });
+});
+
+describe('runNext: quota_exhausted', () => {
+  const FIVE_HOURS = '2026-11-01T08:00:00.000Z';
+  const quota = (detail: RuntimeOutcome['detail']): RuntimeOutcome => ({ kind: 'quota_exhausted', detail: { rateLimit: RATE_LIMIT, ...detail } });
+
+  it('WIP commit, guarded push without a PR, task todo, cooldown from resetsAt, in this exact order', async () => {
+    const { deps, input, log, runtime, store, vcs, console: out } = setup();
+    runtime.responses.queue('interpret', quota({ quotaResetsAt: FIVE_HOURS, quotaWindow: 'five_hour' }));
+    const result = await runNext(deps, input);
+
+    const names = effects(log);
+    expect(names.slice(names.indexOf('store.appendEvent') + 1)).toEqual([
+      'store.recordStep', // agent step failed
+      'workspace.changedPaths',
+      'console.print',
+      'store.recordStep', // commit
+      'workspace.commitAll',
+      'store.recordStep',
+      'console.print',
+      'store.recordStep', // push
+      'secrets.get',
+      'workspace.push',
+      'store.recordStep',
+      'store.transaction',
+      'store.setRuntimeState',
+      'store.updateTask',
+      'store.finishExecution',
+      'store.appendEvent',
+      'console.print',
+      'console.print',
+    ]);
+    expect(names).not.toContain('forge.ensurePr');
+
+    expect(result).toMatchObject({
+      kind: 'quota_exhausted',
+      branch: 'agent/007-T05',
+      pushed: true,
+      cooldownUntil: FIVE_HOURS,
+      cooldownSource: 'resets_at',
+      cooldownWindow: 'five_hour',
+    });
+    const commit = vcs.workspaces[0]!.commits[0]!;
+    expect(commit.message.split('\n')[0]).toBe('wip(007-T05): partial work, quota exhausted');
+    expect(commit.author).toEqual(AUTHOR);
+    expect(vcs.workspaces[0]!.pushes).toEqual(['agent/007-T05']);
+
+    const { execution, task } = finalState(store);
+    expect(execution).toMatchObject({ status: 'quota_exhausted', headCommit: 'commit1', rateLimit: RATE_LIMIT });
+    expect(task).toMatchObject({ status: 'todo', prNumber: null, prUrl: null });
+    expect(task.stopReason).toBe(
+      `The claude-code quota is exhausted. Work in progress was pushed to agent/007-T05 and the task is back in todo. No runs on claude-code until ${FIVE_HOURS}, when the five_hour window resets.`,
+    );
+    expect(store.getRuntimeState('claude-code')).toEqual({
+      runtime: 'claude-code',
+      quotaExhaustedAt: FAKE_START_TIME,
+      cooldownUntil: FIVE_HOURS,
+      cooldownSource: 'resets_at',
+      cooldownWindow: 'five_hour',
+    });
+    expect(store.listEvents(execution.id).map((e) => e.type)).toEqual(['outcome', 'stop']);
+    expect(out.stdout.at(-1)).toBe(`Execution ${execution.id} finished: quota_exhausted.`);
+  });
+
+  it('the next run is refused while the cooldown lasts and resumes after it', async () => {
+    const { deps, input, runtime, clock, store } = setup();
+    runtime.responses.queue('interpret', quota({ quotaResetsAt: FIVE_HOURS, quotaWindow: 'five_hour' }));
+    await runNext(deps, input);
+    expect((await runNext(deps, input)).kind).toBe('quota_cooldown');
+    clock.set('2026-11-01T08:00:01.000Z');
+    expect((await runNext(deps, input)).kind).toBe('pr_opened');
+    expect(store.getTask('web:007-T05')!.status).toBe('in_review');
+  });
+
+  const NOW = Date.parse(FAKE_START_TIME);
+  const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString();
+  const HOUR = 3_600_000;
+  const cooldowns: [string, RuntimeOutcome['detail'], { until: string; source: string; window: string | null }][] = [
+    ['a 5-hour reset', { quotaResetsAt: iso(5 * HOUR), quotaWindow: 'five_hour' }, { until: iso(5 * HOUR), source: 'resets_at', window: 'five_hour' }],
+    ['a 7-day reset', { quotaResetsAt: iso(7 * 24 * HOUR), quotaWindow: 'seven_day' }, { until: iso(7 * 24 * HOUR), source: 'resets_at', window: 'seven_day' }],
+    ['a reset exactly 8 days ahead', { quotaResetsAt: iso(8 * 24 * HOUR), quotaWindow: 'seven_day' }, { until: iso(8 * 24 * HOUR), source: 'resets_at', window: 'seven_day' }],
+    ['a missing reset', {}, { until: iso(300 * 60_000), source: 'fallback', window: null }],
+    ['a reset in the past', { quotaResetsAt: iso(-HOUR), quotaWindow: 'five_hour' }, { until: iso(300 * 60_000), source: 'fallback', window: null }],
+    ['a reset equal to now', { quotaResetsAt: iso(0), quotaWindow: 'five_hour' }, { until: iso(300 * 60_000), source: 'fallback', window: null }],
+    ['a reset more than 8 days ahead', { quotaResetsAt: iso(8 * 24 * HOUR + 1), quotaWindow: 'seven_day' }, { until: iso(300 * 60_000), source: 'fallback', window: null }],
+    ['an unparsable reset', { quotaResetsAt: 'tomorrow', quotaWindow: 'five_hour' }, { until: iso(300 * 60_000), source: 'fallback', window: null }],
+  ];
+  it.each(cooldowns)('cooldown for %s', async (_name, detail, expected) => {
+    const { deps, input, runtime, store, console: out } = setup();
+    runtime.responses.queue('interpret', quota(detail));
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'quota_exhausted', cooldownUntil: expected.until, cooldownSource: expected.source, cooldownWindow: expected.window });
+    expect(store.getRuntimeState('claude-code')).toEqual({
+      runtime: 'claude-code',
+      quotaExhaustedAt: FAKE_START_TIME,
+      cooldownUntil: expected.until,
+      cooldownSource: expected.source,
+      cooldownWindow: expected.window,
+    });
+    expect(out.stdout.at(-2)).toContain(expected.until);
+  });
+
+  it('uses quotaCooldownMinutes of the configuration for the fallback', async () => {
+    const { deps, input, runtime, store } = setup();
+    runtime.responses.queue('interpret', quota({}));
+    await runNext({ ...deps, quotaCooldownMinutes: 45 }, input);
+    expect(store.getRuntimeState('claude-code')!.cooldownUntil).toBe(iso(45 * 60_000));
+  });
+
+  it('the fallback reason says the end is estimated', async () => {
+    const { deps, input, runtime, store } = setup();
+    runtime.responses.queue('interpret', quota({}));
+    await runNext(deps, input);
+    expect(finalState(store).task.stopReason).toContain('(estimated)');
+  });
+
+  it('nothing changed -> no WIP commit and no push, still todo with a cooldown', async () => {
+    const { deps, input, log, runtime, store, vcs } = setup();
+    vcs.workspaceResponses.setDefault('changedPaths', () => []);
+    runtime.responses.queue('interpret', quota({ quotaResetsAt: FIVE_HOURS, quotaWindow: 'five_hour' }));
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'quota_exhausted', pushed: false });
+    expect(effects(log)).not.toContain('workspace.commitAll');
+    noPushOrPr(log);
+    expect(finalState(store).task.status).toBe('todo');
+    expect(store.getRuntimeState('claude-code')!.cooldownSource).toBe('resets_at');
+  });
+
+  it('protected paths -> the policy stop path instead of the push, runtime cooled down all the same', async () => {
+    const { deps, input, log, runtime, store, vcs } = setup();
+    vcs.workspaceResponses.setDefault('changedPaths', () => ['.github/workflows/ci.yml']);
+    runtime.responses.queue('interpret', quota({ quotaResetsAt: FIVE_HOURS, quotaWindow: 'five_hour' }));
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'blocked', reason: 'protected_path' });
+    noPushOrPr(log);
+    expect(vcs.workspaces[0]!.commits).toHaveLength(1);
+    expect(vcs.workspaces[0]!.commits[0]!.message).not.toContain('wip(');
+    const { execution, task } = finalState(store);
+    expect([execution.status, task.status]).toEqual(['blocked', 'blocked']);
+    expect(store.listApprovals()[0]).toMatchObject({ kind: 'protected_path' });
+    expect(store.getRuntimeState('claude-code')).toMatchObject({ cooldownUntil: FIVE_HOURS, cooldownSource: 'resets_at' });
+  });
+
+  it('a rejected WIP push -> failed, nothing else pushed, runtime cooled down', async () => {
+    const { deps, input, runtime, store, vcs } = setup();
+    vcs.workspaceResponses.queueError('push', new PushRejectedError('agent/007-T05', 'rejected'));
+    runtime.responses.queue('interpret', quota({}));
+    const result = await runNext(deps, input);
+    expect(result).toMatchObject({ kind: 'failed', reason: 'The push job failed: PushRejectedError.' });
+    expect(finalState(store).task.status).toBe('failed');
+    expect(store.getRuntimeState('claude-code')!.cooldownSource).toBe('fallback');
+  });
+
+  it('records the rate-limit snapshot of every runtime job that ended on a stop path', async () => {
+    const kinds: RuntimeOutcome['kind'][] = ['quota_exhausted', 'timeout', 'error'];
+    for (const kind of kinds) {
+      const { deps, input, runtime, store } = setup();
+      runtime.responses.queue('interpret', { kind, detail: { rateLimit: RATE_LIMIT } });
+      await runNext(deps, input);
+      expect(finalState(store).execution.rateLimit).toEqual(RATE_LIMIT);
+    }
+  });
+});
+
+describe('recoverInterrupted', () => {
+  function recoverySetup(pid: number | null = 111) {
+    const s = setup();
+    const execution = s.store.startExecution({
+      taskId: 'web:007-T05',
+      featureId: 'web:007',
+      jobKind: 'specialist',
+      agentSlug: 'dev',
+      runtime: 'claude-code',
+      startedAt: '2026-11-01T01:00:00.000Z',
+      pid,
+    });
+    s.store.updateTask('web:007-T05', { status: 'running', updatedAt: FAKE_START_TIME });
+    s.log.clear();
+    return { ...s, execution };
+  }
+
+  it.each([[111], [null]])('a running execution of a dead PID (%s) -> interrupted, task failed, sandbox killed', async (pid) => {
+    const { deps, store, log, execution, console: out } = recoverySetup(pid);
+    const recovered = await recoverInterrupted(deps, () => false);
+    expect(recovered).toEqual([execution.id]);
+    expect(effects(log)).toEqual([
+      'sandbox.kill',
+      'store.transaction',
+      'store.finishExecution',
+      'store.updateTask',
+      'store.appendEvent',
+      'console.print',
+    ]);
+    expect(log.of('sandbox')[0]!.args).toEqual([execution.id]);
+    const after = store.getExecution(execution.id)!;
+    expect(after).toMatchObject({ status: 'interrupted', endedAt: FAKE_START_TIME });
+    expect(after.reason).toContain('interrupted');
+    expect(store.getTask('web:007-T05')).toMatchObject({ status: 'failed', stopReason: after.reason });
+    expect(store.listEvents(execution.id).map((e) => e.type)).toEqual(['interrupted']);
+    expect(out.stdout).toEqual([`Execution ${execution.id} was left running by a process that ended; marked interrupted.`]);
+  });
+
+  it('leaves an execution whose process is alive', async () => {
+    const { deps, store, log, execution } = recoverySetup(111);
+    expect(await recoverInterrupted(deps, (pid) => pid === 111)).toEqual([]);
+    expect(effects(log)).toEqual([]);
+    expect(store.getExecution(execution.id)!.status).toBe('running');
+    expect(store.getTask('web:007-T05')!.status).toBe('running');
+  });
+
+  it('does nothing when no execution is running', async () => {
+    const { deps, log } = setup();
+    expect(await recoverInterrupted(deps, () => false)).toEqual([]);
+    expect(effects(log)).toEqual([]);
+  });
+
+  it('marks the execution even when the kill fails, and records the failure', async () => {
+    const { deps, store, sandbox, execution } = recoverySetup();
+    sandbox.responses.queueError('kill', new Error('docker gone'));
+    await recoverInterrupted(deps, () => false);
+    expect(store.getExecution(execution.id)!.status).toBe('interrupted');
+    expect(store.listEvents(execution.id)[0]!.payload).toMatchObject({ killFailed: 'Error' });
+  });
+
+  it('does not touch a task that is no longer running', async () => {
+    const { deps, store, execution } = recoverySetup();
+    store.updateTask('web:007-T05', { status: 'stopped', updatedAt: FAKE_START_TIME });
+    await recoverInterrupted(deps, () => false);
+    expect(store.getExecution(execution.id)!.status).toBe('interrupted');
+    expect(store.getTask('web:007-T05')!.status).toBe('stopped');
   });
 });
 
