@@ -292,7 +292,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T43. Push guard and git adapter: project branch rules
 
-- [ ] Done
+- [x] Done
 - Depends on: T10, T42
 - Needs human: changes the protected path `src/adapters/vcs/push-guard.ts` (ADR 0025); the human pushes the branch
 - Profile: TS adapters

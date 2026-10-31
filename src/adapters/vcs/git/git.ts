@@ -11,7 +11,9 @@
 // `--git-dir`, `--work-tree`, `core.hooksPath` pointed at an empty directory, `core.fsmonitor=false`,
 // `core.autocrlf=false` and an empty credential helper list. Git passes `-c` settings on to the git
 // processes it spawns, so they hold for those too. Only `push` adds a credential helper, and only
-// through the push guard (`../push-guard.ts`), which the composition root hands in as `pushGuard`.
+// through the push guard (`../push-guard.ts`). The composition root hands in its factory
+// `createPushGuard` as `pushGuard`; `createWorkspace` calls it once with the project's branch rules
+// (ADR 0032), and the workspace keeps that guard and base branch for its whole life.
 //
 // Work tree content is untrusted (prompt injection, ADR 0023): before changed paths are listed and
 // before a commit, every `.git` entry anywhere in the work tree is deleted, so neither a planted
@@ -29,7 +31,7 @@ import { execFileGitRunner, gitEnv } from './runner.ts';
 import type { GitOutput, GitRunner } from './runner.ts';
 
 /**
- * The push guard's interface, implemented by `pushGuard` in `src/adapters/vcs/push-guard.ts`
+ * The push guard's interface, returned by `createPushGuard` in `src/adapters/vcs/push-guard.ts`
  * (protected). `pushArguments` returns everything after the safe prefix; `assertSafePush` checks the
  * complete argument list right before it runs. Both throw PushRejectedError.
  */
@@ -38,11 +40,23 @@ export interface PushGuard {
   assertSafePush(argv: readonly string[]): void;
 }
 
+/** The branch rules a guard is bound to (ADR 0032 section 1). */
+export interface PushGuardRules {
+  readonly baseBranch: string;
+  readonly branchPrefix: string;
+}
+
+/** The signature of `createPushGuard`: validates the rules (throws PushRejectedError) and binds a guard. */
+export type PushGuardFactory = (rules: PushGuardRules) => PushGuard;
+
 export interface GitVcsOptions {
   /** `workspaces\` under the Roster data dir (machine config `workspaceRoot`). */
   readonly workspaceRoot: string;
-  /** The push guard from `src/adapters/vcs/push-guard.ts`. Required: there is no unguarded push. */
-  readonly pushGuard: PushGuard;
+  /**
+   * `createPushGuard` from `src/adapters/vcs/push-guard.ts`, called once per workspace with the
+   * source's rules. Required: there is no unguarded push.
+   */
+  readonly pushGuard: PushGuardFactory;
   /** Defaults to `execFileGitRunner()`. Tests wrap it to record calls. */
   readonly runner?: GitRunner;
   /** Environment the allowlist is taken from. Defaults to `process.env`. */
@@ -78,14 +92,14 @@ function checkRef(ref: string, field = 'ref'): void {
   if (!REF_CHARS.test(ref)) throw new GitInputError(field, 'has characters git refs do not use');
 }
 
-function checkBranchName(name: string): void {
-  checkRef(name, 'branch');
+function checkBranchName(name: string, field = 'branch'): void {
+  checkRef(name, field);
   if (name.includes('..') || name.endsWith('/') || name.startsWith('/') || /[@^~{}]/.test(name)) {
-    throw new GitInputError('branch', 'is not a plain branch name');
+    throw new GitInputError(field, 'is not a plain branch name');
   }
   for (const segment of name.split('/')) {
     if (!BRANCH_SEGMENT.test(segment) || segment.endsWith('.lock') || segment.endsWith('.')) {
-      throw new GitInputError('branch', 'is not a plain branch name');
+      throw new GitInputError(field, 'is not a plain branch name');
     }
   }
 }
@@ -238,11 +252,13 @@ class Workspace implements GitWorkspace {
   readonly paths: WorkspacePaths;
   readonly #git: GitContext;
   readonly #guard: PushGuard;
+  readonly #baseBranch: string;
 
-  constructor(paths: WorkspacePaths, git: GitContext, guard: PushGuard) {
+  constructor(paths: WorkspacePaths, git: GitContext, guard: PushGuard, baseBranch: string) {
     this.paths = paths;
     this.#git = git;
     this.#guard = guard;
+    this.#baseBranch = baseBranch;
   }
 
   async prepareBranch(name: string): Promise<{ readonly resumed: boolean }> {
@@ -251,8 +267,8 @@ class Workspace implements GitWorkspace {
     const resumed = (await this.#git.commitOf(remote)) !== null;
     let start = remote;
     if (!resumed) {
-      start = 'refs/remotes/origin/main';
-      if ((await this.#git.commitOf(start)) === null) throw new NotFoundError('git ref', 'origin/main');
+      start = `refs/remotes/origin/${this.#baseBranch}`;
+      if ((await this.#git.commitOf(start)) === null) throw new NotFoundError('git ref', `origin/${this.#baseBranch}`);
     }
     await this.#git.run('checkout', ['checkout', '--quiet', '--no-track', '-B', name, start]);
     return { resumed };
@@ -352,16 +368,16 @@ function localGitDir(repoPath: string): string {
 
 export class GitVcs implements VcsPort {
   readonly #workspaceRoot: string;
-  readonly #guard: PushGuard;
+  readonly #guardFactory: PushGuardFactory;
   readonly #runner: GitRunner;
   readonly #env: Readonly<Record<string, string | undefined>>;
   readonly #emptyDir: string;
 
   constructor(options: GitVcsOptions) {
     if (!isAbsolute(options.workspaceRoot)) throw new GitInputError('workspace root', 'must be an absolute path');
-    if (options.pushGuard === undefined) throw new GitInputError('push guard', 'is required');
+    if (typeof options.pushGuard !== 'function') throw new GitInputError('push guard', 'is required');
     this.#workspaceRoot = options.workspaceRoot;
-    this.#guard = options.pushGuard;
+    this.#guardFactory = options.pushGuard;
     this.#runner = options.runner ?? execFileGitRunner();
     this.#env = options.env ?? process.env;
     this.#emptyDir = options.emptyDir ?? join(options.workspaceRoot, '.empty-hooks');
@@ -373,6 +389,14 @@ export class GitVcs implements VcsPort {
     checkLocation(source.repoPath, 'repo path');
     if (!isAbsolute(source.repoPath)) throw new GitInputError('repo path', 'must be an absolute path');
     checkLocation(source.remoteUrl, 'remote URL');
+    // The rules are read once and bound here; the guard validates them (PushRejectedError) before
+    // anything is written or run. Neither the guard nor the base branch can change afterwards.
+    const rules: PushGuardRules = Object.freeze({ baseBranch: source.baseBranch, branchPrefix: source.branchPrefix });
+    const guard = this.#guardFactory(rules);
+    if (typeof guard?.pushArguments !== 'function' || typeof guard.assertSafePush !== 'function') {
+      throw new GitInputError('push guard', 'did not return a guard');
+    }
+    checkBranchName(rules.baseBranch, 'base branch');
 
     const root = join(this.#workspaceRoot, source.name, executionId);
     if (existsSync(root)) throw new GitInputError('workspace', `${root} already exists`);
@@ -392,7 +416,7 @@ export class GitVcs implements VcsPort {
     await git.run('remote', ['remote', 'set-url', 'origin', source.remoteUrl]);
     await git.run('fetch', ['fetch', '--quiet', '--no-tags', '--prune', 'origin']);
     removeGitEntries(paths.tree);
-    return new Workspace(paths, git, this.#guard);
+    return new Workspace(paths, git, guard, rules.baseBranch);
   }
 
   async fetch(repoPath: string): Promise<void> {
@@ -437,7 +461,7 @@ export class GitVcs implements VcsPort {
   }
 }
 
-/** Builds the VcsPort. The composition root passes `pushGuard` from `src/adapters/vcs/push-guard.ts`. */
+/** Builds the VcsPort. The composition root passes `createPushGuard` from `src/adapters/vcs/push-guard.ts`. */
 export function createGitVcs(options: GitVcsOptions): GitVcs {
   return new GitVcs(options);
 }

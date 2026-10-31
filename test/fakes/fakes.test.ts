@@ -89,7 +89,10 @@ describe('CallLog and Responses', () => {
     const sandbox = new FakeSandbox(log);
 
     store.createFeature(feature('roster:002', FAKE_START_TIME));
-    const workspace = await vcs.createWorkspace({ name: 'roster', repoPath: 'C:/roster', remoteUrl: 'https://github.com/o/r' }, 'e1');
+    const workspace = await vcs.createWorkspace(
+      { name: 'roster', repoPath: 'C:/roster', remoteUrl: 'https://github.com/o/r', baseBranch: 'main', branchPrefix: 'agent' },
+      'e1',
+    );
     await workspace.prepareBranch('agent/002-T02');
     await sandbox.kill('e1');
     await workspace.push('agent/002-T02', FAKE_TOKEN);
@@ -246,7 +249,7 @@ describe('FakeVcs', () => {
 
   it('creates workspaces whose commits, pushes and scripted errors are recorded without the token', async () => {
     const vcs = new FakeVcs();
-    const workspace = await vcs.createWorkspace({ name: 'roster', repoPath: 'C:/roster', remoteUrl: 'u' }, 'e1');
+    const workspace = await vcs.createWorkspace({ name: 'roster', repoPath: 'C:/roster', remoteUrl: 'u', baseBranch: 'main', branchPrefix: 'agent' }, 'e1');
     expect(workspace.paths.tree).toBe('/fake/workspaces/roster/e1/tree');
     expect(await workspace.headCommit()).toBe(FAKE_BASE_COMMIT);
     vcs.workspaceResponses.queue('prepareBranch', { resumed: true }).queue('changedPaths', ['src/a.ts']);
@@ -266,6 +269,17 @@ describe('FakeVcs', () => {
       'workspace.headCommit',
       'workspace.push',
     ]);
+  });
+
+  it('keeps a frozen copy of the source branch rules on each workspace', async () => {
+    const vcs = new FakeVcs();
+    const source = { name: 'app', repoPath: 'C:/app', remoteUrl: 'u', baseBranch: 'develop', branchPrefix: 'feature' };
+    await vcs.createWorkspace(source, 'e1');
+    const [workspace] = vcs.workspaces;
+    source.baseBranch = 'main';
+    expect(workspace?.rules).toEqual({ baseBranch: 'develop', branchPrefix: 'feature' });
+    expect(Object.isFrozen(workspace?.rules)).toBe(true);
+    expect(vcs.log.calls[0]?.args[0]).toMatchObject({ baseBranch: 'develop', branchPrefix: 'feature' });
   });
 });
 

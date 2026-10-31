@@ -1,6 +1,9 @@
 // Fake VcsPort and GitWorkspace. Repo-level reads answer from files a test seeded; workspace calls
-// are recorded under the port name `workspace`. Recorded pushes never contain the token.
+// are recorded under the port name `workspace`. Recorded pushes never contain the token. Each fake
+// workspace keeps a frozen copy of the branch rules of its source (ADR 0032), as the real one binds
+// its push guard to them; the fake applies no guard, so tests assert the rules and pushes directly.
 
+import type { BranchRules } from '../../src/core/domain/branches.ts';
 import type { WorkspacePaths } from '../../src/core/domain/runtime.ts';
 import type { CommitAuthor, GitWorkspace, VcsPort, WorkspaceSource } from '../../src/ports/vcs.ts';
 import { CallLog, Responses } from './recorder.ts';
@@ -11,13 +14,16 @@ export const FAKE_BASE_COMMIT = 'base000';
 
 export class FakeGitWorkspace implements GitWorkspace {
   readonly paths: WorkspacePaths;
+  /** The source's `baseBranch` and `branchPrefix`, copied when the workspace was created. */
+  readonly rules: BranchRules;
   readonly #log: CallLog;
   readonly #responses: Responses<GitWorkspace>;
   readonly commits: { readonly id: string; readonly message: string; readonly author: CommitAuthor }[] = [];
   readonly pushes: string[] = [];
 
-  constructor(paths: WorkspacePaths, log: CallLog, responses: Responses<GitWorkspace>) {
+  constructor(paths: WorkspacePaths, rules: BranchRules, log: CallLog, responses: Responses<GitWorkspace>) {
     this.paths = paths;
+    this.rules = Object.freeze({ baseBranch: rules.baseBranch, branchPrefix: rules.branchPrefix });
     this.#log = log;
     this.#responses = responses;
   }
@@ -95,6 +101,7 @@ export class FakeVcs implements VcsPort {
       const root = `${FAKE_WORKSPACE_ROOT}/${source.name}/${executionId}`;
       const workspace = new FakeGitWorkspace(
         { root, gitDir: `${root}/git`, tree: `${root}/tree`, inDir: `${root}/in`, outDir: `${root}/out` },
+        source,
         this.log,
         this.workspaceResponses,
       );
