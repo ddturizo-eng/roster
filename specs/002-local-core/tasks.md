@@ -368,7 +368,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T21. Orchestrator: stop, failure, quota and recovery paths
 
-- [ ] Done
+- [x] Done
 - Depends on: T20
 - Profile: TS core
 - Agent: roster-core-ts-engineer

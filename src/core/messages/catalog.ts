@@ -40,6 +40,8 @@ export interface MessageParams {
   readonly 'stop.timeout': { readonly job: string; readonly minutes: number };
   /** A job ended with an error; `reason` is the adapter's short English reason (e.g. `turn limit`). */
   readonly 'stop.error': { readonly job: string; readonly reason: string };
+  /** The agent returned `blocked`; `questions` are its questions, already in `human_language` (ADR 0026). */
+  readonly 'stop.agentBlocked': { readonly questions: readonly string[] };
   /** The selected task has no usable approved agent; hiring (T28) replaces this stop. */
   readonly 'stop.noAgent': Record<string, never>;
   /** The `roster run` process ended while the execution was running. */

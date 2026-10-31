@@ -20,6 +20,8 @@ export const ES: Catalog = {
     (tail === '' ? '' : `\nÚltimas líneas:\n${tail}`),
   'stop.timeout': ({ job, minutes }) => `El trabajo ${job} alcanzó su límite de tiempo de ${minutes} minutos.`,
   'stop.error': ({ job, reason }) => `El trabajo ${job} falló: ${reason}.`,
+  'stop.agentBlocked': ({ questions }) =>
+    `El agente está bloqueado y necesita una respuesta: ${questions.join(' | ')}. No se subió nada.`,
   'stop.noAgent': () => 'La tarea no tiene un agente aprobado que la ejecute.',
   'stop.interrupted': () =>
     'La ejecución se interrumpió: el proceso de roster run terminó antes de que acabara.',
