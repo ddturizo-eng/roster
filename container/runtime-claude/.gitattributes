@@ -1,0 +1,2 @@
+# Image sources are built on Linux: keep LF line endings in every checkout (core.autocrlf on Windows).
+* text eol=lf

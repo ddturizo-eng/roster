@@ -1,0 +1,6 @@
+{
+  "name": "roster-egress-proxy",
+  "private": true,
+  "description": "Roster's zero-dependency egress CONNECT proxy. Marks the .ts files as ES modules inside the image.",
+  "type": "module"
+}
