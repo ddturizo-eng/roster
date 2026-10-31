@@ -114,10 +114,15 @@ describe('open: engine, pragmas, migrations', () => {
         .all()
         .map((row) => row.name);
       expect(tables).toEqual([
+        'approval_requests',
+        'execution_events',
+        'execution_steps',
+        'executions',
         'feature_events',
         'features',
         'grilling',
         'projects',
+        'runtime_state',
         'schema_migrations',
         'task_dependencies',
         'tasks',
@@ -132,14 +137,14 @@ describe('open: engine, pragmas, migrations', () => {
     const first = openStore(path);
     first.upsertProject(project);
     first.close();
-    const extra = { version: 2, name: 'extra', sql: 'CREATE TABLE extra (id INTEGER PRIMARY KEY)' };
+    const extra = { version: 3, name: 'extra', sql: 'CREATE TABLE extra (id INTEGER PRIMARY KEY)' };
     const second = openStore(path, { migrations: [...MIGRATIONS, extra] });
     expect(second.getProject('roster')).toEqual(project);
     second.close();
     openStore(path, { migrations: [...MIGRATIONS, extra] }).close();
     const raw = new DatabaseSync(path);
     try {
-      expect(raw.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get()).toEqual({ n: 2 });
+      expect(raw.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get()).toEqual({ n: MIGRATIONS.length + 1 });
     } finally {
       raw.close();
     }
@@ -147,11 +152,11 @@ describe('open: engine, pragmas, migrations', () => {
 
   it('rolls back every migration when one fails, and the file stays openable', () => {
     const path = tempDb();
-    const broken = { version: 2, name: 'broken', sql: 'CREATE TABLE ok_table (id INTEGER); CREATE TABLE ok_table (id INTEGER)' };
+    const broken = { version: 3, name: 'broken', sql: 'CREATE TABLE ok_table (id INTEGER); CREATE TABLE ok_table (id INTEGER)' };
     expect(() => openStore(path, { migrations: [...MIGRATIONS, broken] })).toThrow(StoreMigrationError);
     const raw = new DatabaseSync(path);
     try {
-      // One transaction: on a fresh file, version 1 is rolled back with the broken version 2.
+      // One transaction: on a fresh file, versions 1 and 2 are rolled back with the broken version 3.
       const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
       expect(tables).toEqual([]);
     } finally {
@@ -162,7 +167,7 @@ describe('open: engine, pragmas, migrations', () => {
 
   it('refuses a database newer than this build', () => {
     const path = tempDb();
-    openStore(path, { migrations: [...MIGRATIONS, { version: 2, name: 'later', sql: 'SELECT 1' }] }).close();
+    openStore(path, { migrations: [...MIGRATIONS, { version: 3, name: 'later', sql: 'SELECT 1' }] }).close();
     expect(() => openStore(path)).toThrow(StoreMigrationError);
   });
 
