@@ -216,7 +216,7 @@ them: `src/core/policy/**` (T08), `src/adapters/vcs/push-guard.ts` (T10, project
 
 ## T12. DPAPI secrets adapter and `roster auth set`
 
-- [ ] Done
+- [x] Done
 - Depends on: T03
 - Profile: Windows/PowerShell
 - Agent: roster-windows-powershell-engineer
